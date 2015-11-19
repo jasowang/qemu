@@ -206,7 +206,7 @@ static void *virtio_scsi_load_request(QEMUFile *f, SCSIRequest *sreq)
     req = virtio_scsi_init_req(s, vs->cmd_vqs[n]);
     qemu_get_buffer(f, (unsigned char *)&req->elem, sizeof(req->elem));
 
-    virtqueue_map(&req->elem);
+    virtqueue_map(&vs->parent_obj, &req->elem);
 
     if (virtio_scsi_parse_req(req, sizeof(VirtIOSCSICmdReq) + vs->cdb_size,
                               sizeof(VirtIOSCSICmdResp) + vs->sense_size) < 0) {

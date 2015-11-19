@@ -151,7 +151,7 @@ void virtqueue_discard(VirtQueue *vq, const VirtQueueElement *elem,
 void virtqueue_fill(VirtQueue *vq, const VirtQueueElement *elem,
                     unsigned int len, unsigned int idx);
 
-void virtqueue_map(VirtQueueElement *elem);
+void virtqueue_map(VirtIODevice *vdev, VirtQueueElement *elem);
 int virtqueue_pop(VirtQueue *vq, VirtQueueElement *elem);
 int virtqueue_avail_bytes(VirtQueue *vq, unsigned int in_bytes,
                           unsigned int out_bytes);

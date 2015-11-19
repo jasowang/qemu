@@ -705,7 +705,7 @@ static int fetch_active_ports_list(QEMUFile *f, int version_id,
 
                 qemu_get_buffer(f, (unsigned char *)&port->elem,
                                 sizeof(port->elem));
-                virtqueue_map(&port->elem);
+                virtqueue_map(&s->parent_obj, &port->elem);
 
                 /*
                  *  Port was throttled on source machine.  Let's

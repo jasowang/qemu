@@ -21,6 +21,7 @@
 #include "hw/virtio/virtio-bus.h"
 #include "migration/migration.h"
 #include "hw/virtio/virtio-access.h"
+#include "sysemu/dma.h"
 
 /*
  * The alignment to use between consumer and producer parts of vring.
@@ -247,6 +248,7 @@ int virtio_queue_empty(VirtQueue *vq)
 static void virtqueue_unmap_sg(VirtQueue *vq, const VirtQueueElement *elem,
                                unsigned int len)
 {
+    AddressSpace *dma_as = virtio_get_dma_as(vq->vdev);
     unsigned int offset;
     int i;
 
@@ -254,17 +256,17 @@ static void virtqueue_unmap_sg(VirtQueue *vq, const VirtQueueElement *elem,
     for (i = 0; i < elem->in_num; i++) {
         size_t size = MIN(len - offset, elem->in_sg[i].iov_len);
 
-        cpu_physical_memory_unmap(elem->in_sg[i].iov_base,
-                                  elem->in_sg[i].iov_len,
-                                  1, size);
+        dma_memory_unmap(dma_as, elem->in_sg[i].iov_base, elem->in_sg[i].iov_len,
+                         DMA_DIRECTION_FROM_DEVICE, size);
 
         offset += size;
     }
 
     for (i = 0; i < elem->out_num; i++)
-        cpu_physical_memory_unmap(elem->out_sg[i].iov_base,
-                                  elem->out_sg[i].iov_len,
-                                  0, elem->out_sg[i].iov_len);
+        dma_memory_unmap(dma_as, elem->out_sg[i].iov_base,
+                         elem->out_sg[i].iov_len,
+                         DMA_DIRECTION_TO_DEVICE,
+                         elem->out_sg[i].iov_len);
 }
 
 void virtqueue_discard(VirtQueue *vq, const VirtQueueElement *elem,
@@ -448,9 +450,9 @@ int virtqueue_avail_bytes(VirtQueue *vq, unsigned int in_bytes,
     return in_bytes <= in_total && out_bytes <= out_total;
 }
 
-static void virtqueue_map_iovec(struct iovec *sg, hwaddr *addr,
-                                unsigned int *num_sg, unsigned int max_size,
-                                int is_write)
+static void virtqueue_map_iovec(VirtIODevice *vdev, struct iovec *sg,
+                                hwaddr *addr, unsigned int *num_sg,
+                                unsigned int max_size, int is_write)
 {
     unsigned int i;
     hwaddr len;
@@ -469,7 +471,10 @@ static void virtqueue_map_iovec(struct iovec *sg, hwaddr *addr,
 
     for (i = 0; i < *num_sg; i++) {
         len = sg[i].iov_len;
-        sg[i].iov_base = cpu_physical_memory_map(addr[i], &len, is_write);
+        sg[i].iov_base = dma_memory_map(virtio_get_dma_as(vdev),
+                                        addr[i], &len, is_write ?
+                                        DMA_DIRECTION_FROM_DEVICE :
+                                        DMA_DIRECTION_TO_DEVICE);
         if (!sg[i].iov_base) {
             error_report("virtio: error trying to map MMIO memory");
             exit(1);
@@ -491,13 +496,14 @@ static void virtqueue_map_iovec(struct iovec *sg, hwaddr *addr,
     }
 }
 
-void virtqueue_map(VirtQueueElement *elem)
+void virtqueue_map(VirtIODevice *vdev, VirtQueueElement *elem)
 {
-    virtqueue_map_iovec(elem->in_sg, elem->in_addr, &elem->in_num,
+    virtqueue_map_iovec(vdev, elem->in_sg, elem->in_addr, &elem->in_num,
                         MIN(ARRAY_SIZE(elem->in_sg), ARRAY_SIZE(elem->in_addr)),
                         1);
-    virtqueue_map_iovec(elem->out_sg, elem->out_addr, &elem->out_num,
-                        MIN(ARRAY_SIZE(elem->out_sg), ARRAY_SIZE(elem->out_addr)),
+    virtqueue_map_iovec(vdev, elem->out_sg, elem->out_addr, &elem->out_num,
+                        MIN(ARRAY_SIZE(elem->out_sg),
+                        ARRAY_SIZE(elem->out_addr)),
                         0);
 }
 
@@ -562,7 +568,7 @@ int virtqueue_pop(VirtQueue *vq, VirtQueueElement *elem)
     } while ((i = virtqueue_next_desc(vdev, desc_pa, i, max)) != max);
 
     /* Now map what we have collected */
-    virtqueue_map(elem);
+    virtqueue_map(vdev, elem);
 
     elem->index = head;
 
