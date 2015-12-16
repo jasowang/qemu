@@ -516,7 +516,7 @@ static void vhost_set_memory(MemoryListener *listener,
 
 static bool vhost_section(MemoryRegionSection *section)
 {
-    return memory_region_is_ram(section->mr);
+    return memory_region_is_ram(section->mr) && !section->readonly;
 }
 
 static void vhost_begin(MemoryListener *listener)
