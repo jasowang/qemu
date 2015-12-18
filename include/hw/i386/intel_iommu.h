@@ -43,12 +43,14 @@
 #define DMAR_REG_SIZE               0x230
 #define VTD_HOST_ADDRESS_WIDTH      39
 #define VTD_HAW_MASK                ((1ULL << VTD_HOST_ADDRESS_WIDTH) - 1)
+#define VTD_IOTLB_MAX_SIZE          1024    /* Max size of the hash table */
 
 typedef struct VTDContextEntry VTDContextEntry;
 typedef struct VTDContextCacheEntry VTDContextCacheEntry;
 typedef struct IntelIOMMUState IntelIOMMUState;
 typedef struct VTDAddressSpace VTDAddressSpace;
 typedef struct VTDIOTLBEntry VTDIOTLBEntry;
+typedef struct VTDIOTLBKey VTDIOTLBKey;
 typedef struct VTDBus VTDBus;
 
 /* Context-Entry */
@@ -79,6 +81,14 @@ struct VTDBus {
     VTDAddressSpace *dev_as[0];	/* A table of VTDAddressSpace objects indexed by devfn */
 };
 
+struct IntelIOMMUState;
+
+struct VTDIOTLBKey {
+    uint64 key;
+    IntelIOMMUState *s;
+    QTAILQ_ENTRY(VTDIOTLBKey) free_link;
+};
+
 struct VTDIOTLBEntry {
     uint64_t gfn;
     uint16_t domain_id;
@@ -86,6 +96,8 @@ struct VTDIOTLBEntry {
     uint64_t mask;
     bool read_flags;
     bool write_flags;
+    IntelIOMMUState *s;
+    QTAILQ_ENTRY(VTDIOTLBEntry) free_link;
 };
 
 /* The iommu (DMAR) device state struct */
@@ -123,6 +135,10 @@ struct IntelIOMMUState {
     MemoryRegionIOMMUOps iommu_ops;
     GHashTable *vtd_as_by_busptr;   /* VTDBus objects indexed by PCIBus* reference */
     VTDBus *vtd_as_by_bus_num[VTD_PCI_BUS_MAX]; /* VTDBus objects indexed by bus number */
+    VTDIOTLBEntry tlb_entries[VTD_IOTLB_MAX_SIZE];
+    VTDIOTLBKey   tlb_keys[VTD_IOTLB_MAX_SIZE];
+    QTAILQ_HEAD(, VTDIOTLBKey) free_tlb_keys;
+    QTAILQ_HEAD(, VTDIOTLBEntry) free_tlb_entries;
 };
 
 /* Find the VTD Address space associated with the given bus pointer,

@@ -243,9 +243,10 @@ static void vtd_update_iotlb(IntelIOMMUState *s, uint16_t source_id,
                              bool read_flags, bool write_flags,
                              uint32_t level)
 {
-    VTDIOTLBEntry *entry = g_malloc(sizeof(*entry));
-    uint64_t *key = g_malloc(sizeof(*key));
+    VTDIOTLBEntry *entry;
+    VTDIOTLBKey *key;
     uint64_t gfn = vtd_get_iotlb_gfn(addr, level);
+
 
     VTD_DPRINTF(CACHE, "update iotlb sid 0x%"PRIx16 " gpa 0x%"PRIx64
                 " slpte 0x%"PRIx64 " did 0x%"PRIx16, source_id, addr, slpte,
@@ -255,14 +256,18 @@ static void vtd_update_iotlb(IntelIOMMUState *s, uint16_t source_id,
         vtd_reset_iotlb(s);
     }
 
+    entry = QTAILQ_FIRST(&s->free_tlb_entries);
     entry->gfn = gfn;
     entry->domain_id = domain_id;
     entry->slpte = slpte;
     entry->read_flags = read_flags;
     entry->write_flags = write_flags;
     entry->mask = vtd_slpt_level_page_mask(level);
-    *key = vtd_get_iotlb_key(gfn, source_id, level);
-    g_hash_table_replace(s->iotlb, key, entry);
+    key = QTAILQ_FIRST(&s->free_tlb_keys);
+    key->key = vtd_get_iotlb_key(gfn, source_id, level);
+    g_hash_table_replace(s->iotlb, &key->key, entry);
+    QTAILQ_REMOVE(&s->free_tlb_entries, entry, free_link);
+    QTAILQ_REMOVE(&s->free_tlb_keys, key, free_link);
 }
 
 /* Given the reg addr of both the message data and address, generate an
@@ -2015,9 +2020,26 @@ static void vtd_reset(DeviceState *dev)
     vtd_init(s);
 }
 
+static void vtd_iotlb_entry_free(gpointer data)
+{
+    VTDIOTLBEntry *entry = data;
+    IntelIOMMUState *s = entry->s;
+
+    QTAILQ_INSERT_HEAD(&s->free_tlb_entries, entry, free_link);
+}
+
+static void vtd_iotlb_key_free(gpointer data)
+{
+    VTDIOTLBKey *key = data;
+    IntelIOMMUState *s = key->s;
+
+    QTAILQ_INSERT_HEAD(&s->free_tlb_keys, key, free_link);
+}
+
 static void vtd_realize(DeviceState *dev, Error **errp)
 {
     IntelIOMMUState *s = INTEL_IOMMU_DEVICE(dev);
+    int i;
 
     VTD_DPRINTF(GENERAL, "");
     memset(s->vtd_as_by_bus_num, 0, sizeof(s->vtd_as_by_bus_num));
@@ -2026,10 +2048,23 @@ static void vtd_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->csrmem);
     /* No corresponding destroy */
     s->iotlb = g_hash_table_new_full(vtd_uint64_hash, vtd_uint64_equal,
-                                     g_free, g_free);
+                                     vtd_iotlb_key_free, vtd_iotlb_entry_free);
     s->vtd_as_by_busptr = g_hash_table_new_full(vtd_uint64_hash, vtd_uint64_equal,
                                               g_free, g_free);
     vtd_init(s);
+
+    QTAILQ_INIT(&s->free_tlb_entries);
+    QTAILQ_INIT(&s->free_tlb_keys);
+    for (i = 0; i < VTD_IOTLB_MAX_SIZE; i++) {
+        s->tlb_entries[i].s = s;
+        QTAILQ_INSERT_TAIL(&s->free_tlb_entries,
+                           &s->tlb_entries[i],
+                           free_link);
+        s->tlb_keys[i].s = s;
+        QTAILQ_INSERT_TAIL(&s->free_tlb_keys,
+                           &s->tlb_keys[i],
+                           free_link);
+    }
 }
 
 static void vtd_class_init(ObjectClass *klass, void *data)
