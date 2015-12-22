@@ -36,9 +36,12 @@ struct vhost_log {
 };
 
 struct vhost_memory;
+struct vhost_iotlb_entry;
 struct vhost_dev {
     MemoryListener memory_listener;
     struct vhost_memory *mem;
+    struct vhost_iotlb_entry *iotlb_req;
+    EventNotifier iotlb_notifier;
     int n_mem_sections;
     MemoryRegionSection *mem_sections;
     struct vhost_virtqueue *vqs;

@@ -166,6 +166,24 @@ static int vhost_kernel_get_vq_index(struct vhost_dev *dev, int idx)
     return idx - dev->vq_index;
 }
 
+static int vhost_kernel_set_iotlb_request(struct vhost_dev *dev,
+                                          struct vhost_iotlb_entry *entry)
+{
+    return vhost_kernel_call(dev, VHOST_SET_IOTLB_REQUEST_ENTRY, entry);
+}
+
+static int vhost_kernel_update_iotlb(struct vhost_dev *dev,
+                                     struct vhost_iotlb_entry *entry)
+{
+    int r = vhost_kernel_call(dev, VHOST_UPDATE_IOTLB, entry);
+    return r;
+}
+
+static int vhost_kernel_set_iotlb_fd(struct vhost_dev *dev, int fd)
+{
+    return vhost_kernel_call(dev, VHOST_SET_IOTLB_FD, &fd);
+}
+
 static const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_backend_init = vhost_kernel_init,
@@ -189,6 +207,9 @@ static const VhostOps kernel_ops = {
         .vhost_set_owner = vhost_kernel_set_owner,
         .vhost_reset_device = vhost_kernel_reset_device,
         .vhost_get_vq_index = vhost_kernel_get_vq_index,
+        .vhost_set_iotlb_request = vhost_kernel_set_iotlb_request,
+        .vhost_update_iotlb = vhost_kernel_update_iotlb,
+        .vhost_set_iotlb_fd = vhost_kernel_set_iotlb_fd,
 };
 
 int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)

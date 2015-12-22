@@ -23,6 +23,7 @@ typedef enum VhostBackendType {
 struct vhost_dev;
 struct vhost_log;
 struct vhost_memory;
+struct vhost_iotlb_entry;
 struct vhost_vring_file;
 struct vhost_vring_state;
 struct vhost_vring_addr;
@@ -70,6 +71,11 @@ typedef int (*vhost_set_vring_enable_op)(struct vhost_dev *dev,
 typedef bool (*vhost_requires_shm_log_op)(struct vhost_dev *dev);
 typedef int (*vhost_migration_done_op)(struct vhost_dev *dev,
                                        char *mac_addr);
+typedef int (*vhost_set_iotlb_request_op)(struct vhost_dev *dev,
+                                          struct vhost_iotlb_entry *entry);
+typedef int (*vhost_update_iotlb_op)(struct vhost_dev *dev,
+                                     struct vhost_iotlb_entry *entry);
+typedef int (*vhost_set_iotlb_fd_op)(struct vhost_dev *dev, int fd);
 
 typedef struct VhostOps {
     VhostBackendType backend_type;
@@ -97,6 +103,9 @@ typedef struct VhostOps {
     vhost_set_vring_enable_op vhost_set_vring_enable;
     vhost_requires_shm_log_op vhost_requires_shm_log;
     vhost_migration_done_op vhost_migration_done;
+    vhost_set_iotlb_request_op vhost_set_iotlb_request;
+    vhost_update_iotlb_op vhost_update_iotlb;
+    vhost_set_iotlb_fd_op vhost_set_iotlb_fd;
 } VhostOps;
 
 extern const VhostOps user_ops;
