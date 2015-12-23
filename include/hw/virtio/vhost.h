@@ -38,7 +38,9 @@ struct vhost_log {
 struct vhost_memory;
 struct vhost_iotlb_entry;
 struct vhost_dev {
+    VirtIODevice *vdev;
     MemoryListener memory_listener;
+    TLBListener tlb_listener;
     struct vhost_memory *mem;
     struct vhost_iotlb_entry *iotlb_req;
     EventNotifier iotlb_notifier;
