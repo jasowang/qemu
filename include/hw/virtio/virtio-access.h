@@ -226,9 +226,9 @@ static inline void *virtio_memory_map(VirtIODevice *vdev, hwaddr addr,
                           DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE);
 }
 
-static inline void virtqueue_memory_unmap(VirtIODevice *vdev, void *buffer,
-                                          hwaddr len, int is_write,
-                                          hwaddr access_len)
+static inline void virtio_memory_unmap(VirtIODevice *vdev, void *buffer,
+                                       hwaddr len, int is_write,
+                                       hwaddr access_len)
 {
     AddressSpace *dma_as = virtio_get_dma_as(vdev);
 
