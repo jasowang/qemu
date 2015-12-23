@@ -2512,6 +2512,24 @@ static bool prepare_mmio_access(MemoryRegion *mr)
     return release_lock;
 }
 
+uint8_t *address_space_get_ram_ptr(AddressSpace *as, hwaddr addr, int len,
+                                   bool is_write, hwaddr *l)
+{
+    MemoryRegion *mr;
+    hwaddr addr1;
+
+    rcu_read_lock();
+    mr = address_space_translate(as, addr, &addr1, l, is_write);
+    if (!memory_access_is_direct(mr, is_write)) {
+        rcu_read_unlock();
+        return NULL;
+    }
+
+    addr1 += memory_region_get_ram_addr(mr);
+    rcu_read_unlock();
+    return qemu_get_ram_ptr(addr1);
+}
+
 MemTxResult address_space_rw(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
                              uint8_t *buf, int len, bool is_write)
 {

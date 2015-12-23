@@ -1194,6 +1194,9 @@ MemTxResult address_space_rw(AddressSpace *as, hwaddr addr,
                              MemTxAttrs attrs, uint8_t *buf,
                              int len, bool is_write);
 
+uint8_t *address_space_get_ram_ptr(AddressSpace *as, hwaddr addr,
+                                   int len, bool is_write,
+                                   hwaddr *l);
 /**
  * address_space_write: write to address space.
  *
