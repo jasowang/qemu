@@ -157,6 +157,11 @@ struct MemoryRegionIOMMUOps {
 typedef struct CoalescedMemoryRange CoalescedMemoryRange;
 typedef struct MemoryRegionIoeventfd MemoryRegionIoeventfd;
 
+struct TLBListener {
+    void (*invalidate)(TLBListener *listener, hwaddr addr, hwaddr len);
+    QTAILQ_ENTRY(TLBListener) link;
+};
+
 struct MemoryRegion {
     Object parent_obj;
     /* All fields are private - violators will be prosecuted */
@@ -193,6 +198,7 @@ struct MemoryRegion {
     unsigned ioeventfd_nb;
     MemoryRegionIoeventfd *ioeventfds;
     NotifierList iommu_notify;
+    QTAILQ_HEAD(, TLBListener) tlb_listeners;
 };
 
 /**
@@ -1111,6 +1117,12 @@ void memory_listener_register(MemoryListener *listener, AddressSpace *filter);
  * @listener: an object containing the callbacks to be removed
  */
 void memory_listener_unregister(MemoryListener *listener);
+
+void tlb_listener_register(TLBListener *listener, MemoryRegion *mr);
+
+void tlb_listener_unregister(TLBListener *listener, MemoryRegion *mr);
+
+void tlb_invalidate(MemoryRegion *mr, hwaddr addr, hwaddr len);
 
 /**
  * memory_global_dirty_log_start: begin dirty logging for all regions
