@@ -927,6 +927,8 @@ void memory_region_init(MemoryRegion *mr,
         g_free(name_array);
         g_free(escaped_name);
     }
+
+    QTAILQ_INIT(&mr->tlb_listeners);
 }
 
 static void memory_region_get_addr(Object *obj, Visitor *v, void *opaque,
@@ -2099,6 +2101,25 @@ void memory_listener_register(MemoryListener *listener, AddressSpace *filter)
 void memory_listener_unregister(MemoryListener *listener)
 {
     QTAILQ_REMOVE(&memory_listeners, listener, link);
+}
+
+void tlb_listener_register(TLBListener *listener, MemoryRegion *mr)
+{
+    QTAILQ_INSERT_TAIL(&mr->tlb_listeners, listener, link);
+}
+
+void tlb_listener_unregister(TLBListener *listener, MemoryRegion *mr)
+{
+    QTAILQ_REMOVE(&mr->tlb_listeners, listener, link);
+}
+
+void tlb_invalidate(MemoryRegion *mr, hwaddr addr, hwaddr len)
+{
+    TLBListener *listener;
+
+    QTAILQ_FOREACH(listener, &mr->tlb_listeners, link) {
+        listener->invalidate(listener, addr, len);
+    }
 }
 
 void address_space_init(AddressSpace *as, MemoryRegion *root, const char *name)
