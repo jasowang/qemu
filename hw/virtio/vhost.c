@@ -985,6 +985,7 @@ static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
     event_notifier_cleanup(&vq->masked_notifier);
 }
 
+#if 0
 static void vhost_dump_iotlb_entry(struct vhost_iotlb_entry *entry)
 {
     fprintf(stderr, "iova 0x%"PRIx64 "size 0x%"PRIx64 "uaddr 0x%"PRIx64 "type %x\n",
@@ -994,22 +995,26 @@ static void vhost_dump_iotlb_entry(struct vhost_iotlb_entry *entry)
             entry->flags.type);
     fprintf(stderr, "\n");
 }
+#endif
 
 static void vhost_iotlb_invalidate(TLBListener *listener,
                                    hwaddr addr,
                                    hwaddr len)
 {
+//    int r;
     struct vhost_dev *hdev = container_of(listener, struct vhost_dev,
                                           tlb_listener);
     struct vhost_iotlb_entry inv = {
         .flags.type = VHOST_IOTLB_INVALIDATE,
+        .flags.valid = VHOST_IOTLB_INVALID,
         .iova = addr,
         .size = len,
     };
 
-    fprintf(stderr, "invalidate!\n");
-    vhost_dump_iotlb_entry(&inv);
+//    fprintf(stderr, "---> invalidate!\n");
+//    vhost_dump_iotlb_entry(&inv);
     vhost_dev_update_iotlb(hdev, &inv);
+//    fprintf(stderr, "invalidate result %d\n", r);
 }
 
 int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
@@ -1257,7 +1262,8 @@ static void vhost_device_iotlb_request(void *opaque)
 
     event_notifier_test_and_clear(&hdev->iotlb_notifier);
 
-    reply.flags.type = VHOST_IOTLB_INVALIDATE;
+    reply.flags.type = VHOST_IOTLB_UPDATE;
+    reply.flags.valid = VHOST_IOTLB_INVALID;
 
 //    fprintf(stderr, "vhost device iotlb miss\n");
 //    vhost_dump_iotlb_entry(hdev->iotlb_req);
@@ -1296,12 +1302,13 @@ static void vhost_device_iotlb_request(void *opaque)
         reply.userspace_addr = (hwaddr) ptr;
         reply.size = TARGET_PAGE_SIZE;
         reply.flags.type = VHOST_IOTLB_UPDATE;
+        reply.flags.valid = VHOST_IOTLB_VALID;
+    } else {
+        fprintf(stderr, "Fail! addrxlat: ptr %p len 0x%"PRIx64 "\n",
+                ptr, l);
     }
-
-    fprintf(stderr, "addrxlat: ptr %p len 0x%"PRIx64 "\n",
-            ptr, l);
 done:
-    vhost_dump_iotlb_entry(&reply);
+//    vhost_dump_iotlb_entry(&reply);
     vhost_dev_update_iotlb(hdev, &reply);
 }
 
@@ -1338,7 +1345,8 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
                         vhost_device_iotlb_request,
                         NULL, hdev);
 
-    tlb_listener_register(&hdev->tlb_listener, virtio_get_dma_as(vdev)->root);
+    fprintf(stderr, "dma as addr is %s\n", virtio_get_dma_as(vdev)->root->alias->name);
+    tlb_listener_register(&hdev->tlb_listener, virtio_get_dma_as(vdev)->root->alias);
 
     r = hdev->vhost_ops->vhost_set_mem_table(hdev, hdev->mem);
     if (r < 0) {
@@ -1418,7 +1426,7 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
     }
 
     tlb_listener_unregister(&hdev->tlb_listener,
-                            virtio_get_dma_as(vdev)->root);
+                            virtio_get_dma_as(vdev)->root->alias);
     qemu_set_fd_handler(event_notifier_get_fd(&hdev->iotlb_notifier),
                         NULL, NULL, NULL);
     vhost_dev_set_iotlb_request(hdev, NULL);

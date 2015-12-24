@@ -268,6 +268,7 @@ static void vtd_update_iotlb(IntelIOMMUState *s, uint16_t source_id,
     entry->read_flags = read_flags;
     entry->write_flags = write_flags;
     entry->mask = vtd_slpt_level_page_mask(level);
+    entry->sid = source_id;
     key = QTAILQ_FIRST(&s->free_tlb_keys);
     key->key = vtd_get_iotlb_key(gfn, source_id, level);
     g_hash_table_replace(s->iotlb, &key->key, entry);
@@ -2038,9 +2039,29 @@ static void vtd_reset(DeviceState *dev)
 
 static void vtd_iotlb_entry_free(gpointer data)
 {
+    VTDAddressSpace *vtd_dev_as;
     VTDIOTLBEntry *entry = data;
     IntelIOMMUState *s = entry->s;
+    MemoryRegion *mr;
+    struct VTDBus *vtd_bus;
+    uint16_t sid = entry->sid;
+    uint8_t devfn = sid & 0xff;
+    uint8_t bus_num = sid >> 8;
 
+    vtd_bus = vtd_find_as_from_bus_num(s, bus_num);
+    if (!vtd_bus) {
+        goto done;
+    }
+
+    vtd_dev_as = vtd_bus->dev_as[devfn];
+    if (!vtd_dev_as) {
+        goto done;
+    }
+
+    mr = vtd_dev_as->as.root;
+    tlb_invalidate(mr, entry->gfn << TARGET_PAGE_BITS, TARGET_PAGE_SIZE);
+
+done:
     QTAILQ_INSERT_HEAD(&s->free_tlb_entries, entry, free_link);
 }
 

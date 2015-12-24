@@ -93,6 +93,7 @@ struct VTDIOTLBKey {
 struct VTDIOTLBEntry {
     uint64_t gfn;
     uint16_t domain_id;
+    uint16_t sid;
     uint64_t slpte;
     uint64_t mask;
     bool read_flags;
