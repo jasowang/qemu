@@ -804,6 +804,7 @@ static void vtd_do_iommu_translate(VTDAddressSpace *vtd_as, PCIBus *bus,
     bool reads = true;
     bool writes = true;
     VTDIOTLBEntry *iotlb_entry;
+    static unsigned long count, hit;
 
     /* Check if the request is in interrupt address range */
     if (vtd_is_interrupt_addr(addr)) {
@@ -828,8 +829,10 @@ static void vtd_do_iommu_translate(VTDAddressSpace *vtd_as, PCIBus *bus,
         }
     }
     /* Try to fetch slpte form IOTLB */
+    count ++;
     iotlb_entry = vtd_lookup_iotlb(s, source_id, addr);
     if (iotlb_entry) {
+        hit ++;
         VTD_DPRINTF(CACHE, "hit iotlb sid 0x%"PRIx16 " gpa 0x%"PRIx64
                     " slpte 0x%"PRIx64 " did 0x%"PRIx16, source_id, addr,
                     iotlb_entry->slpte, iotlb_entry->domain_id);
@@ -890,6 +893,12 @@ out:
     entry->iova = addr & page_mask;
     entry->translated_addr = vtd_get_slpte_addr(slpte) & page_mask;
     entry->addr_mask = ~page_mask;
+    if (count % 10000 == 0) {
+        fprintf(stderr, "hit rate %d\n", (int)(hit * 100 / count));
+        if (count % 100000 == 0) {
+            hit = count = 0;
+        }
+    }
     entry->perm = (writes ? 2 : 0) + (reads ? 1 : 0);
 }
 
