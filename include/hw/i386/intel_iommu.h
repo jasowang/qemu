@@ -87,6 +87,7 @@ struct VTDIOTLBKey {
     uint64 key;
     IntelIOMMUState *s;
     QTAILQ_ENTRY(VTDIOTLBKey) free_link;
+    QTAILQ_ENTRY(VTDIOTLBKey) lru_link;
 };
 
 struct VTDIOTLBEntry {
@@ -138,6 +139,7 @@ struct IntelIOMMUState {
     VTDIOTLBEntry tlb_entries[VTD_IOTLB_MAX_SIZE];
     VTDIOTLBKey   tlb_keys[VTD_IOTLB_MAX_SIZE];
     QTAILQ_HEAD(, VTDIOTLBKey) free_tlb_keys;
+    QTAILQ_HEAD(VTDIOTLBKeyLRUHead, VTDIOTLBKey) lru_tlb_keys;
     QTAILQ_HEAD(, VTDIOTLBEntry) free_tlb_entries;
 };
 

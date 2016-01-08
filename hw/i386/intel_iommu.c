@@ -221,19 +221,23 @@ static uint64_t vtd_get_iotlb_gfn(hwaddr addr, uint32_t level)
 static VTDIOTLBEntry *vtd_lookup_iotlb(IntelIOMMUState *s, uint16_t source_id,
                                        hwaddr addr)
 {
-    VTDIOTLBEntry *entry;
     uint64_t key;
+    gpointer orig_key = NULL;
+    gpointer entry = NULL;
     int level;
 
     for (level = VTD_SL_PT_LEVEL; level < VTD_SL_PML4_LEVEL; level++) {
         key = vtd_get_iotlb_key(vtd_get_iotlb_gfn(addr, level),
                                 source_id, level);
-        entry = g_hash_table_lookup(s->iotlb, &key);
-        if (entry) {
+        if (g_hash_table_lookup_extended(s->iotlb, &key, &orig_key,
+                                         &entry)) {
+            VTDIOTLBKey *key = container_of(orig_key, VTDIOTLBKey, key);
+            IntelIOMMUState *s  = key->s;
+            QTAILQ_REMOVE(&s->lru_tlb_keys, key, lru_link);
+            QTAILQ_INSERT_HEAD(&s->lru_tlb_keys, key, lru_link);
             goto out;
         }
     }
-
 out:
     return entry;
 }
@@ -252,8 +256,9 @@ static void vtd_update_iotlb(IntelIOMMUState *s, uint16_t source_id,
                 " slpte 0x%"PRIx64 " did 0x%"PRIx16, source_id, addr, slpte,
                 domain_id);
     if (g_hash_table_size(s->iotlb) >= VTD_IOTLB_MAX_SIZE) {
-        VTD_DPRINTF(CACHE, "iotlb exceeds size limit, forced to reset");
-        vtd_reset_iotlb(s);
+        VTD_DPRINTF(CACHE, "iotlb LRU evict");
+        key = QTAILQ_LAST(&s->lru_tlb_keys, VTDIOTLBKeyLRUHead);
+        g_hash_table_remove(s->iotlb, &key->key);
     }
 
     entry = QTAILQ_FIRST(&s->free_tlb_entries);
@@ -268,6 +273,7 @@ static void vtd_update_iotlb(IntelIOMMUState *s, uint16_t source_id,
     g_hash_table_replace(s->iotlb, &key->key, entry);
     QTAILQ_REMOVE(&s->free_tlb_entries, entry, free_link);
     QTAILQ_REMOVE(&s->free_tlb_keys, key, free_link);
+    QTAILQ_INSERT_HEAD(&s->lru_tlb_keys, key, lru_link);
 }
 
 /* Given the reg addr of both the message data and address, generate an
@@ -2043,6 +2049,7 @@ static void vtd_iotlb_key_free(gpointer data)
     VTDIOTLBKey *key = data;
     IntelIOMMUState *s = key->s;
 
+    QTAILQ_REMOVE(&s->lru_tlb_keys, key, lru_link);
     QTAILQ_INSERT_HEAD(&s->free_tlb_keys, key, free_link);
 }
 
@@ -2063,8 +2070,10 @@ static void vtd_realize(DeviceState *dev, Error **errp)
                                               g_free, g_free);
     vtd_init(s);
 
-    QTAILQ_INIT(&s->free_tlb_entries);
     QTAILQ_INIT(&s->free_tlb_keys);
+    QTAILQ_INIT(&s->lru_tlb_keys);
+    QTAILQ_INIT(&s->free_tlb_entries);
+
     for (i = 0; i < VTD_IOTLB_MAX_SIZE; i++) {
         s->tlb_entries[i].s = s;
         QTAILQ_INSERT_TAIL(&s->free_tlb_entries,
