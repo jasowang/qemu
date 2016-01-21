@@ -21,6 +21,7 @@
 #include "qemu/memfd.h"
 #include <linux/vhost.h>
 #include "exec/address-spaces.h"
+#include "exec/ram_addr.h"
 #include "hw/virtio/virtio-bus.h"
 #include "hw/virtio/virtio-access.h"
 #include "migration/migration.h"
@@ -1251,14 +1252,34 @@ void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
     }
 }
 
+static int vhost_memory_region_lookup(struct vhost_dev *hdev,
+                                      __u64 gpa, __u64 *uaddr, __u64 *len)
+{
+    int i;
+
+    for (i = 0; i < hdev->mem->nregions; i++) {
+        struct vhost_memory_region *reg = hdev->mem->regions + i;
+
+        if (gpa >= reg->guest_phys_addr &&
+            reg->guest_phys_addr + reg->memory_size > gpa) {
+            *uaddr = reg->userspace_addr + gpa - reg->guest_phys_addr;
+            *len = reg->guest_phys_addr + reg->memory_size - gpa;
+            return 0;
+        }
+    }
+
+    return -EFAULT;
+}
+
 static void vhost_device_iotlb_request(void *opaque)
 {
+    IOMMUTLBEntry iotlb;
     struct vhost_dev *hdev = opaque;
     /* FIXME: const hdev->iotlb_request? */
     struct vhost_iotlb_entry *request = hdev->iotlb_req;
     struct vhost_iotlb_entry reply = *request;
-    uint8_t *ptr;
-    hwaddr l;
+//    uint8_t *ptr;
+//    hwaddr l;
 
     event_notifier_test_and_clear(&hdev->iotlb_notifier);
 
@@ -1272,42 +1293,35 @@ static void vhost_device_iotlb_request(void *opaque)
         goto done;
     }
 
-#if 0
-    for (i = 0; i < hdev->mem->nregions; i++) {
-        struct vhost_memory_region *reg = hdev->mem->regions + i;
-        #if 0
-        fprintf(stderr, "req iova %lx reg->gpa %lx size %lx\n",
-                (unsigned long)request->iova,
-                (unsigned long)reg->guest_phys_addr,
-                (unsigned long)reg->memory_size);
-        #endif
-        if (request->iova >= reg->guest_phys_addr &&
-            reg->guest_phys_addr + reg->memory_size > request->iova) {
-            reply.userspace_addr = reg->userspace_addr + request->iova -
-                reg->guest_phys_addr;
-            reply.size = reg->guest_phys_addr + reg->memory_size -
-                request->iova;
-            reply.flags.type = VHOST_IOTLB_UPDATE;
+    iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(hdev->vdev),
+                                          request->iova,
+                                          false);
+    if (iotlb.target_as != NULL) {
+        if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
+                                       &reply.userspace_addr,
+                                       &reply.size)) {
             goto done;
         }
-    }
-#endif
-
-    ptr = address_space_get_ram_ptr(virtio_get_dma_as(hdev->vdev),
-                                    request->iova,
-                                    TARGET_PAGE_SIZE,
-                                    false,
-                                    &l);
-    if (ptr && l >= TARGET_PAGE_SIZE) {
-        reply.userspace_addr = (hwaddr) ptr;
-        reply.size = TARGET_PAGE_SIZE;
+        reply.iova = reply.iova & ~iotlb.addr_mask;
+        reply.size = MIN(iotlb.addr_mask + 1, reply.size);
+        if (iotlb.perm == IOMMU_RO) {
+            reply.flags.perm = VHOST_ACCESS_RO;
+            fprintf(stderr, "RO\n");
+        } else if (iotlb.perm == IOMMU_WO) {
+            reply.flags.perm = VHOST_ACCESS_WO;
+            fprintf(stderr, "WO\n");
+        } else if (iotlb.perm == IOMMU_RW) {
+            reply.flags.perm = VHOST_ACCESS_RW;
+            fprintf(stderr, "RW\n");
+        } else {
+            fprintf(stderr, "unknown iotlb perm!\n");
+        }
         reply.flags.type = VHOST_IOTLB_UPDATE;
         reply.flags.valid = VHOST_IOTLB_VALID;
-    } else {
-        fprintf(stderr, "Fail! addrxlat: ptr %p len 0x%"PRIx64 "\n",
-                ptr, l);
     }
+
 done:
+//    fprintf(stderr, "reply");
 //    vhost_dump_iotlb_entry(&reply);
     vhost_dev_update_iotlb(hdev, &reply);
 }
