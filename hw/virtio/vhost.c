@@ -668,18 +668,11 @@ static int vhost_dev_update_iotlb(struct vhost_dev *dev,
     return r < 0 ? -errno : 0;
 }
 
-static int vhost_dev_set_iotlb_request(struct vhost_dev *dev,
-                                       struct vhost_iotlb_entry *entry)
+static int vhost_run_iotlb(struct vhost_dev *dev,
+                           int *enabled)
 {
     int r;
-    r = dev->vhost_ops->vhost_set_iotlb_request(dev, entry);
-    return r < 0 ? -errno : 0;
-}
-
-static int vhost_dev_set_iotlb_fd(struct vhost_dev *dev, int fd)
-{
-    int r;
-    r = dev->vhost_ops->vhost_set_iotlb_fd(dev, fd);
+    r = dev->vhost_ops->vhost_run_iotlb(dev, enabled);
     return r < 0 ? -errno : 0;
 }
 
@@ -798,6 +791,93 @@ static int vhost_virtqueue_set_vring_endian_legacy(struct vhost_dev *dev,
     return -errno;
 }
 
+static int vhost_memory_region_lookup(struct vhost_dev *hdev,
+                                      __u64 gpa, __u64 *uaddr, __u64 *len)
+{
+    int i;
+
+    for (i = 0; i < hdev->mem->nregions; i++) {
+        struct vhost_memory_region *reg = hdev->mem->regions + i;
+
+        if (gpa >= reg->guest_phys_addr &&
+            reg->guest_phys_addr + reg->memory_size > gpa) {
+            *uaddr = reg->userspace_addr + gpa - reg->guest_phys_addr;
+            *len = reg->guest_phys_addr + reg->memory_size - gpa;
+            return 0;
+        }
+    }
+
+    return -EFAULT;
+}
+
+static void vhost_dump_iotlb_entry(struct vhost_iotlb_entry *entry)
+{
+    #if 0
+    fprintf(stderr, "iova 0x%"PRIx64 "size 0x%"PRIx64 "uaddr 0x%"PRIx64 "type %x\n",
+            (unsigned long)entry->iova,
+            (unsigned long)entry->size,
+            (unsigned long)entry->userspace_addr,
+            entry->flags.type);
+    fprintf(stderr, "\n");
+    #endif
+}
+
+static void vhost_device_iotlb_request(void *opaque)
+{
+    IOMMUTLBEntry iotlb;
+    struct vhost_virtqueue *vq = opaque;
+    struct vhost_dev *hdev = vq->dev;
+    /* FIXME: const hdev->iotlb_request? */
+    struct vhost_iotlb_entry *request = vq->iotlb_req;
+    struct vhost_iotlb_entry reply = *request;
+//    uint8_t *ptr;
+//    hwaddr l;
+
+    event_notifier_test_and_clear(&vq->iotlb_notifier);
+
+    reply.flags.type = VHOST_IOTLB_UPDATE;
+    reply.flags.valid = VHOST_IOTLB_INVALID;
+
+//    fprintf(stderr, "vhost device iotlb miss\n");
+//    vhost_dump_iotlb_entry(hdev->iotlb_req);
+
+    if (request->flags.type != VHOST_IOTLB_MISS) {
+        goto done;
+    }
+
+    iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(hdev->vdev),
+                                          request->iova,
+                                          false);
+    if (iotlb.target_as != NULL) {
+        if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
+                                       &reply.userspace_addr,
+                                       &reply.size)) {
+            goto done;
+        }
+        reply.iova = reply.iova & ~iotlb.addr_mask;
+        reply.size = MIN(iotlb.addr_mask + 1, reply.size);
+        if (iotlb.perm == IOMMU_RO) {
+            reply.flags.perm = VHOST_ACCESS_RO;
+//            fprintf(stderr, "RO\n");
+        } else if (iotlb.perm == IOMMU_WO) {
+            reply.flags.perm = VHOST_ACCESS_WO;
+//            fprintf(stderr, "WO\n");
+        } else if (iotlb.perm == IOMMU_RW) {
+            reply.flags.perm = VHOST_ACCESS_RW;
+//            fprintf(stderr, "RW\n");
+        } else {
+//            fprintf(stderr, "unknown iotlb perm!\n");
+        }
+        reply.flags.type = VHOST_IOTLB_UPDATE;
+        reply.flags.valid = VHOST_IOTLB_VALID;
+    }
+
+done:
+//    fprintf(stderr, "reply");
+    vhost_dump_iotlb_entry(&reply);
+    vhost_dev_update_iotlb(hdev, &reply);
+}
+
 static int vhost_virtqueue_start(struct vhost_dev *dev,
                                 struct VirtIODevice *vdev,
                                 struct vhost_virtqueue *vq,
@@ -884,7 +964,6 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     event_notifier_test_and_clear(&vq->masked_notifier);
 
     return 0;
-
 fail_kick:
 fail_alloc:
     virtio_memory_unmap(vdev, vq->ring, virtio_queue_get_ring_size(vdev, idx),
@@ -964,6 +1043,9 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     struct vhost_vring_file file = {
         .index = vhost_vq_index,
     };
+    struct vhost_vring_iotlb_entry request = {
+        .index = vhost_vq_index,
+    };
     int r = event_notifier_init(&vq->masked_notifier, 0);
     if (r < 0) {
         return r;
@@ -975,7 +1057,37 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
         r = -errno;
         goto fail_call;
     }
+
+    r = event_notifier_init(&vq->iotlb_notifier, 0);
+    if (r < 0) {
+        r = -errno;
+        goto fail_call;
+    }
+
+    file.fd = event_notifier_get_fd(&vq->iotlb_notifier);
+    r = dev->vhost_ops->vhost_set_vring_iotlb_call(dev, &file);
+    if (r) {
+        r = -errno;
+        goto fail_iotlb;
+    }
+    qemu_set_fd_handler(event_notifier_get_fd(&vq->iotlb_notifier),
+                        vhost_device_iotlb_request, NULL, vq);
+
+    vq->iotlb_req = g_malloc0(sizeof(*vq->iotlb_req));
+    request.userspace_addr = (uint64_t)(unsigned long)vq->iotlb_req;
+    r = dev->vhost_ops->vhost_set_vring_iotlb_request(dev, &request);
+    if (r) {
+        r = -errno;
+        goto fail_req;
+    }
+
+    vq->dev = dev;
+
     return 0;
+fail_req:
+    qemu_set_fd_handler(file.fd, NULL, NULL, NULL);
+fail_iotlb:
+    event_notifier_cleanup(&vq->iotlb_notifier);
 fail_call:
     event_notifier_cleanup(&vq->masked_notifier);
     return r;
@@ -983,20 +1095,12 @@ fail_call:
 
 static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
 {
+    qemu_set_fd_handler(event_notifier_get_fd(&vq->iotlb_notifier),
+                        NULL, NULL, NULL);
     event_notifier_cleanup(&vq->masked_notifier);
+    event_notifier_cleanup(&vq->iotlb_notifier);
+    g_free(vq->iotlb_req);
 }
-
-#if 0
-static void vhost_dump_iotlb_entry(struct vhost_iotlb_entry *entry)
-{
-    fprintf(stderr, "iova 0x%"PRIx64 "size 0x%"PRIx64 "uaddr 0x%"PRIx64 "type %x\n",
-            (unsigned long)entry->iova,
-            (unsigned long)entry->size,
-            (unsigned long)entry->userspace_addr,
-            entry->flags.type);
-    fprintf(stderr, "\n");
-}
-#endif
 
 static void vhost_iotlb_invalidate(TLBListener *listener,
                                    hwaddr addr,
@@ -1098,7 +1202,6 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     }
 
     hdev->mem = g_malloc0(offsetof(struct vhost_memory, regions));
-    hdev->iotlb_req = g_malloc0(sizeof(struct vhost_iotlb_entry));
     hdev->n_mem_sections = 0;
     hdev->mem_sections = NULL;
     hdev->log = NULL;
@@ -1131,7 +1234,6 @@ void vhost_dev_cleanup(struct vhost_dev *hdev)
         error_free(hdev->migration_blocker);
     }
     g_free(hdev->mem);
-    g_free(hdev->iotlb_req);
     g_free(hdev->mem_sections);
     hdev->vhost_ops->vhost_backend_cleanup(hdev);
     QLIST_REMOVE(hdev, entry);
@@ -1252,80 +1354,6 @@ void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
     }
 }
 
-static int vhost_memory_region_lookup(struct vhost_dev *hdev,
-                                      __u64 gpa, __u64 *uaddr, __u64 *len)
-{
-    int i;
-
-    for (i = 0; i < hdev->mem->nregions; i++) {
-        struct vhost_memory_region *reg = hdev->mem->regions + i;
-
-        if (gpa >= reg->guest_phys_addr &&
-            reg->guest_phys_addr + reg->memory_size > gpa) {
-            *uaddr = reg->userspace_addr + gpa - reg->guest_phys_addr;
-            *len = reg->guest_phys_addr + reg->memory_size - gpa;
-            return 0;
-        }
-    }
-
-    return -EFAULT;
-}
-
-static void vhost_device_iotlb_request(void *opaque)
-{
-    IOMMUTLBEntry iotlb;
-    struct vhost_dev *hdev = opaque;
-    /* FIXME: const hdev->iotlb_request? */
-    struct vhost_iotlb_entry *request = hdev->iotlb_req;
-    struct vhost_iotlb_entry reply = *request;
-//    uint8_t *ptr;
-//    hwaddr l;
-
-    event_notifier_test_and_clear(&hdev->iotlb_notifier);
-
-    reply.flags.type = VHOST_IOTLB_UPDATE;
-    reply.flags.valid = VHOST_IOTLB_INVALID;
-
-//    fprintf(stderr, "vhost device iotlb miss\n");
-//    vhost_dump_iotlb_entry(hdev->iotlb_req);
-
-    if (request->flags.type != VHOST_IOTLB_MISS) {
-        goto done;
-    }
-
-    iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(hdev->vdev),
-                                          request->iova,
-                                          false);
-    if (iotlb.target_as != NULL) {
-        if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
-                                       &reply.userspace_addr,
-                                       &reply.size)) {
-            goto done;
-        }
-        reply.iova = reply.iova & ~iotlb.addr_mask;
-        reply.size = MIN(iotlb.addr_mask + 1, reply.size);
-        if (iotlb.perm == IOMMU_RO) {
-            reply.flags.perm = VHOST_ACCESS_RO;
-            fprintf(stderr, "RO\n");
-        } else if (iotlb.perm == IOMMU_WO) {
-            reply.flags.perm = VHOST_ACCESS_WO;
-            fprintf(stderr, "WO\n");
-        } else if (iotlb.perm == IOMMU_RW) {
-            reply.flags.perm = VHOST_ACCESS_RW;
-            fprintf(stderr, "RW\n");
-        } else {
-            fprintf(stderr, "unknown iotlb perm!\n");
-        }
-        reply.flags.type = VHOST_IOTLB_UPDATE;
-        reply.flags.valid = VHOST_IOTLB_VALID;
-    }
-
-done:
-//    fprintf(stderr, "reply");
-//    vhost_dump_iotlb_entry(&reply);
-    vhost_dev_update_iotlb(hdev, &reply);
-}
-
 /* Host notifiers must be enabled at this point. */
 int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
 {
@@ -1337,27 +1365,6 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     if (r < 0) {
         goto fail_features;
     }
-
-    /* TODO: conditionally */
-    r = vhost_dev_set_iotlb_request(hdev, hdev->iotlb_req);
-    if (r < 0) {
-        goto fail_iotlb;
-    }
-
-    r = event_notifier_init(&hdev->iotlb_notifier, 0);
-    if (r < 0) {
-        goto fail_notifier_init;
-    }
-
-    r = vhost_dev_set_iotlb_fd(hdev,
-                               event_notifier_get_fd(&hdev->iotlb_notifier));
-    if (r < 0) {
-        goto fail_iotlb_fd;
-    }
-
-    qemu_set_fd_handler(event_notifier_get_fd(&hdev->iotlb_notifier),
-                        vhost_device_iotlb_request,
-                        NULL, hdev);
 
     fprintf(stderr, "dma as addr is %s\n", virtio_get_dma_as(vdev)->root->alias->name);
     tlb_listener_register(&hdev->tlb_listener, virtio_get_dma_as(vdev)->root->alias);
@@ -1398,8 +1405,18 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
         hdev->vhost_ops->vhost_set_vring_enable(hdev, hdev->vq_index == 0);
     }
 
+    /* FIXME: enabled */
+    r = vhost_run_iotlb(hdev, NULL);
+    if (r < 0) {
+        goto fail_iotlb;
+    }
+
     hdev->vdev = vdev;
     return 0;
+fail_iotlb:
+    if (hdev->vhost_ops->vhost_set_vring_enable) {
+        hdev->vhost_ops->vhost_set_vring_enable(hdev, 0);
+    }
 fail_log:
     vhost_log_put(hdev, false);
 fail_vq:
@@ -1411,11 +1428,6 @@ fail_vq:
     }
     i = hdev->nvqs;
 
-    vhost_dev_set_iotlb_fd(hdev, -1);
-fail_iotlb_fd:
-fail_notifier_init:
-    vhost_dev_set_iotlb_request(hdev, NULL);
-fail_iotlb:
 fail_mem:
 fail_features:
 
@@ -1441,10 +1453,6 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
 
     tlb_listener_unregister(&hdev->tlb_listener,
                             virtio_get_dma_as(vdev)->root->alias);
-    qemu_set_fd_handler(event_notifier_get_fd(&hdev->iotlb_notifier),
-                        NULL, NULL, NULL);
-    vhost_dev_set_iotlb_request(hdev, NULL);
-    vhost_dev_set_iotlb_fd(hdev, -1);
     vhost_log_put(hdev, true);
     hdev->started = false;
     hdev->log = NULL;

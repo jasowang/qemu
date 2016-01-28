@@ -20,6 +20,9 @@ struct vhost_virtqueue {
     unsigned long long ring_phys;
     unsigned ring_size;
     EventNotifier masked_notifier;
+    EventNotifier iotlb_notifier;
+    struct vhost_iotlb_entry *iotlb_req;
+    struct vhost_dev *dev;
 };
 
 typedef unsigned long vhost_log_chunk_t;
@@ -42,8 +45,6 @@ struct vhost_dev {
     MemoryListener memory_listener;
     TLBListener tlb_listener;
     struct vhost_memory *mem;
-    struct vhost_iotlb_entry *iotlb_req;
-    EventNotifier iotlb_notifier;
     int n_mem_sections;
     MemoryRegionSection *mem_sections;
     struct vhost_virtqueue *vqs;
