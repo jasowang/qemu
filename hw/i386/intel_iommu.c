@@ -2059,7 +2059,7 @@ static void vtd_iotlb_entry_free(gpointer data)
     }
 
     mr = vtd_dev_as->as.root;
-    tlb_invalidate(mr, entry->gfn << TARGET_PAGE_BITS, TARGET_PAGE_SIZE);
+    tlb_invalidate(mr, entry->gfn << TARGET_PAGE_BITS, ~entry->mask + 1);
 
 done:
     QTAILQ_INSERT_HEAD(&s->free_tlb_entries, entry, free_link);
