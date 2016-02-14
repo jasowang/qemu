@@ -1824,8 +1824,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
 
     if (!(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_PCIE)
         && !(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_MODERN)
-        && pci_bus_is_express(pci_dev->bus)
-        && !pci_bus_is_root(pci_dev->bus)) {
+        && pci_bus_is_express(pci_dev->bus)) {
         int pos;
 
         pci_dev->cap_present |= QEMU_PCI_CAP_EXPRESS;
@@ -1840,6 +1839,9 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
          * PCI Power Management Interface Specification.
          */
         pci_set_word(pci_dev->config + pos + PCI_PM_PMC, 0x3);
+
+        pcie_add_capability(pci_dev, PCI_EXT_CAP_ID_ATS, 0x1,
+                            256, PCI_EXT_CAP_ATS_SIZEOF);
     }
 
     virtio_pci_bus_new(&proxy->bus, sizeof(proxy->bus), proxy);
