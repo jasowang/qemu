@@ -739,11 +739,18 @@ static int vtd_dev_to_context_entry(IntelIOMMUState *s, uint8_t bus_num,
                     "context-entry hi 0x%"PRIx64 " lo 0x%"PRIx64,
                     ce->hi, ce->lo);
         return -VTD_FR_CONTEXT_ENTRY_INV;
-    } else if (ce->lo & VTD_CONTEXT_ENTRY_TT) {
-        VTD_DPRINTF(GENERAL, "error: unsupported Translation Type in "
-                    "context-entry hi 0x%"PRIx64 " lo 0x%"PRIx64,
-                    ce->hi, ce->lo);
-        return -VTD_FR_CONTEXT_ENTRY_INV;
+    } else {
+        switch (ce->lo & VTD_CONTEXT_ENTRY_TT) {
+        case VTD_CONTEXT_TT_MULTI_LEVEL:
+            /* fall through */
+        case VTD_CONTEXT_TT_DEV_IOTLB:
+            break;
+        default:
+            VTD_DPRINTF(GENERAL, "error: unsupported Translation Type in "
+                        "context-entry hi 0x%"PRIx64 " lo 0x%"PRIx64,
+                        ce->hi, ce->lo);
+            return -VTD_FR_CONTEXT_ENTRY_INV;
+        }
     }
     return 0;
 }
@@ -1381,6 +1388,36 @@ static bool vtd_process_iotlb_desc(IntelIOMMUState *s, VTDInvDesc *inv_desc)
     return true;
 }
 
+static bool vtd_process_device_iotlb_desc(IntelIOMMUState *s,
+                                          VTDInvDesc *inv_desc)
+{
+    #if 0
+    hwaddr addr;
+    uint16_t sid;
+    uint8_t devfn;
+    bool size;
+
+    addr = VTD_INV_DESC_DEVICE_IOTLB_ADDR(inv_desc->hi);
+    sid = VTD_INV_DESC_DEVICE_IOTLB_SID(inv_desc->lo);
+    devfn = sid & 0xff;
+    size = VTD_INV_DESC_DEVICE_IOTLB_SIZE(inv_desc->hi);
+
+
+    if ((inv_desc->lo & VTD_INV_DESC_DEVICE_IOTLB_RSVD_LO) ||
+        (inv_desc->hi & VTD_INV_DESC_DEVICE_IOTLB_RSVD_HI)) {
+        VTD_DPRINTF(GENERAL, "error: non-zero reserved field in Device "
+                    "IOTLB Invalidate Descriptor hi 0x%"PRIx64 " lo 0x%"PRIx64,
+                    inv_desc->hi, inv_desc->lo);
+        return false;
+    }
+
+    fprintf(stderr, "addr 0x%llx devfn %x size %x\n",
+            (unsigned long long)addr, devfn, size);
+
+    #endif
+    return true;
+}
+
 static bool vtd_process_inv_desc(IntelIOMMUState *s)
 {
     VTDInvDesc inv_desc;
@@ -1416,6 +1453,14 @@ static bool vtd_process_inv_desc(IntelIOMMUState *s)
         VTD_DPRINTF(INV, "Invalidation Wait Descriptor hi 0x%"PRIx64
                     " lo 0x%"PRIx64, inv_desc.hi, inv_desc.lo);
         if (!vtd_process_wait_desc(s, &inv_desc)) {
+            return false;
+        }
+        break;
+
+    case VTD_INV_DESC_DEVICE:
+        VTD_DPRINTF(INV, "Device IOTLB Invalidation Descriptor hi 0x%"PRIx64
+                    " lo 0x%"PRIx64, inv_desc.hi, inv_desc.lo);
+        if (!vtd_process_device_iotlb_desc(s, &inv_desc)) {
             return false;
         }
         break;
@@ -1973,7 +2018,7 @@ static void vtd_init(IntelIOMMUState *s)
     s->next_frcd_reg = 0;
     s->cap = VTD_CAP_FRO | VTD_CAP_NFR | VTD_CAP_ND | VTD_CAP_MGAW |
         VTD_CAP_SAGAW | VTD_CAP_MAMV | VTD_CAP_PSI | VTD_CAP_SLLPS;
-    s->ecap = VTD_ECAP_QI | VTD_ECAP_IRO;
+    s->ecap = VTD_ECAP_QI | VTD_ECAP_DT | VTD_ECAP_IRO;
 
     vtd_reset_context_cache(s);
     vtd_reset_iotlb(s);
