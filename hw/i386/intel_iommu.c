@@ -1391,17 +1391,21 @@ static bool vtd_process_iotlb_desc(IntelIOMMUState *s, VTDInvDesc *inv_desc)
 static bool vtd_process_device_iotlb_desc(IntelIOMMUState *s,
                                           VTDInvDesc *inv_desc)
 {
-    #if 0
+    VTDAddressSpace *vtd_dev_as;
+    struct VTDBus *vtd_bus;
+    MemoryRegion *mr;
     hwaddr addr;
+    uint64_t sz;
     uint16_t sid;
     uint8_t devfn;
     bool size;
+    uint8_t bus_num;
 
     addr = VTD_INV_DESC_DEVICE_IOTLB_ADDR(inv_desc->hi);
     sid = VTD_INV_DESC_DEVICE_IOTLB_SID(inv_desc->lo);
     devfn = sid & 0xff;
+    bus_num = sid >> 8;
     size = VTD_INV_DESC_DEVICE_IOTLB_SIZE(inv_desc->hi);
-
 
     if ((inv_desc->lo & VTD_INV_DESC_DEVICE_IOTLB_RSVD_LO) ||
         (inv_desc->hi & VTD_INV_DESC_DEVICE_IOTLB_RSVD_HI)) {
@@ -1411,10 +1415,38 @@ static bool vtd_process_device_iotlb_desc(IntelIOMMUState *s,
         return false;
     }
 
-    fprintf(stderr, "addr 0x%llx devfn %x size %x\n",
-            (unsigned long long)addr, devfn, size);
-
+    #if 0
+    fprintf(stderr, "INV: addr 0x%" PRIx64 " size %d devfn %d bus %d\n",
+            addr, size, devfn, bus_num);
     #endif
+
+    vtd_bus = vtd_find_as_from_bus_num(s, bus_num);
+    if (!vtd_bus) {
+        goto done;
+    }
+
+    vtd_dev_as = vtd_bus->dev_as[devfn];
+    if (!vtd_dev_as) {
+        goto done;
+    }
+
+    if (size) {
+        sz = ffsll(~(addr >> VTD_PAGE_SHIFT));
+        addr = addr & ~((1 << (sz + VTD_PAGE_SHIFT)) - 1);
+        sz = VTD_PAGE_SIZE << sz;
+    } else {
+        sz = VTD_PAGE_SIZE;
+    }
+
+    if (size) {
+            fprintf(stderr, "[DT] addr 0x%" PRIx64 "sz 0x%" PRIx64 "\n",
+                    addr, sz);
+    }
+
+    mr = vtd_dev_as->as.root;
+    tlb_invalidate(mr, addr, sz);
+
+done:
     return true;
 }
 
@@ -2087,7 +2119,7 @@ static void vtd_iotlb_entry_free(gpointer data)
     VTDAddressSpace *vtd_dev_as;
     VTDIOTLBEntry *entry = data;
     IntelIOMMUState *s = entry->s;
-    MemoryRegion *mr;
+//    MemoryRegion *mr;
     struct VTDBus *vtd_bus;
     uint16_t sid = entry->sid;
     uint8_t devfn = sid & 0xff;
@@ -2103,8 +2135,12 @@ static void vtd_iotlb_entry_free(gpointer data)
         goto done;
     }
 
-    mr = vtd_dev_as->as.root;
-    tlb_invalidate(mr, entry->gfn << TARGET_PAGE_BITS, ~entry->mask + 1);
+//    mr = vtd_dev_as->as.root;
+//    if (~entry->mask + 1 > 4096) {
+        fprintf(stderr, "[IOTLB] addr 0x%" PRIx64 "sz 0x%" PRIx64 "\n",
+                entry->gfn << TARGET_PAGE_BITS, ~entry->mask + 1);
+//    }
+//    tlb_invalidate(mr, entry->gfn << TARGET_PAGE_BITS, ~entry->mask + 1);
 
 done:
     QTAILQ_INSERT_HEAD(&s->free_tlb_entries, entry, free_link);

@@ -874,7 +874,7 @@ static void vhost_device_iotlb_request(void *opaque)
 
 done:
 //    fprintf(stderr, "reply");
-    vhost_dump_iotlb_entry(&reply);
+//    vhost_dump_iotlb_entry(&reply);
     vhost_dev_update_iotlb(hdev, &reply);
 }
 
@@ -1117,7 +1117,7 @@ static void vhost_iotlb_invalidate(TLBListener *listener,
     };
 
 //    fprintf(stderr, "---> invalidate!\n");
-//    vhost_dump_iotlb_entry(&inv);
+    vhost_dump_iotlb_entry(&inv);
     vhost_dev_update_iotlb(hdev, &inv);
 //    fprintf(stderr, "invalidate result %d\n", r);
 }
