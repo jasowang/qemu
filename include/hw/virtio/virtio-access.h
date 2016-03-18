@@ -16,6 +16,7 @@
 #define _QEMU_VIRTIO_ACCESS_H
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-bus.h"
+#include "sysemu/dma.h"
 #include "exec/address-spaces.h"
 
 static inline AddressSpace *virtio_get_dma_as(VirtIODevice *vdev)
@@ -215,4 +216,25 @@ static inline void virtio_tswap64s(VirtIODevice *vdev, uint64_t *s)
 {
     *s = virtio_tswap64(vdev, *s);
 }
+
+static inline void *virtio_memory_map(VirtIODevice *vdev, hwaddr addr,
+                                      hwaddr *plen, int is_write)
+{
+    AddressSpace *dma_as = virtio_get_dma_as(vdev);
+
+    return dma_memory_map(dma_as, addr, plen, is_write ?
+                          DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE);
+}
+
+static inline void virtio_memory_unmap(VirtIODevice *vdev, void *buffer,
+                                       hwaddr len, int is_write,
+                                       hwaddr access_len)
+{
+    AddressSpace *dma_as = virtio_get_dma_as(vdev);
+
+    dma_memory_unmap(dma_as, buffer, len, is_write ?
+                     DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE,
+                     access_len);
+}
+
 #endif /* _QEMU_VIRTIO_ACCESS_H */
