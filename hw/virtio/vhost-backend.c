@@ -167,6 +167,37 @@ static int vhost_kernel_get_vq_index(struct vhost_dev *dev, int idx)
     return idx - dev->vq_index;
 }
 
+static int vhost_kernel_set_vring_iotlb_request(struct vhost_dev *dev,
+                                                struct
+                                                vhost_vring_iotlb_entry
+                                                *entry)
+{
+    fprintf(stderr, "entry uaddr %p\n", (void *)entry->userspace_addr);
+    int r = vhost_kernel_call(dev, VHOST_SET_VRING_IOTLB_REQUEST, entry);
+    return r;
+}
+
+static int vhost_kernel_update_iotlb(struct vhost_dev *dev,
+                                     struct vhost_iotlb_entry *entry)
+{
+    int r = vhost_kernel_call(dev, VHOST_UPDATE_IOTLB, entry);
+    return r;
+}
+
+static int vhost_kernel_run_iotlb(struct vhost_dev *dev,
+                                  int *enabled)
+{
+    int r = vhost_kernel_call(dev, VHOST_RUN_IOTLB, enabled);
+    return r;
+}
+
+static int vhost_kernel_set_vring_iotlb_call(struct vhost_dev *dev,
+                                             struct vhost_vring_file *file)
+{
+    fprintf(stderr, "vring iotlb call !\n");
+    return vhost_kernel_call(dev, VHOST_SET_VRING_IOTLB_CALL, file);
+}
+
 static const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_backend_init = vhost_kernel_init,
@@ -190,6 +221,10 @@ static const VhostOps kernel_ops = {
         .vhost_set_owner = vhost_kernel_set_owner,
         .vhost_reset_device = vhost_kernel_reset_device,
         .vhost_get_vq_index = vhost_kernel_get_vq_index,
+        .vhost_set_vring_iotlb_request = vhost_kernel_set_vring_iotlb_request,
+        .vhost_update_iotlb = vhost_kernel_update_iotlb,
+        .vhost_set_vring_iotlb_call = vhost_kernel_set_vring_iotlb_call,
+        .vhost_run_iotlb = vhost_kernel_run_iotlb,
 };
 
 int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)

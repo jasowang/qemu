@@ -1827,6 +1827,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
          */
         int pos;
 
+        fprintf(stderr, "hello!\n");
         pos = pcie_endpoint_cap_init(pci_dev, 0);
         assert(pos > 0);
 
@@ -1840,6 +1841,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
         pci_set_word(pci_dev->config + pos + PCI_PM_PMC, 0x3);
 
         if (proxy->flags & VIRTIO_PCI_FLAG_ATS) {
+            fprintf(stderr, "ATS!\n");
             pcie_add_capability(pci_dev, PCI_EXT_CAP_ID_ATS, 0x1,
                                 256, PCI_EXT_CAP_ATS_SIZEOF);
         }
