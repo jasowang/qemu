@@ -22,9 +22,11 @@ typedef enum VhostBackendType {
 struct vhost_dev;
 struct vhost_log;
 struct vhost_memory;
+struct vhost_iotlb_entry;
 struct vhost_vring_file;
 struct vhost_vring_state;
 struct vhost_vring_addr;
+struct vhost_vring_iotlb_entry;
 struct vhost_scsi_target;
 
 typedef int (*vhost_backend_init)(struct vhost_dev *dev, void *opaque);
@@ -72,6 +74,14 @@ typedef int (*vhost_migration_done_op)(struct vhost_dev *dev,
 typedef bool (*vhost_backend_can_merge_op)(struct vhost_dev *dev,
                                            uint64_t start1, uint64_t size1,
                                            uint64_t start2, uint64_t size2);
+typedef int (*vhost_set_vring_iotlb_request_op)(struct vhost_dev *dev,
+                                                struct vhost_vring_iotlb_entry *entry);
+typedef int (*vhost_update_iotlb_op)(struct vhost_dev *dev,
+                                     struct vhost_iotlb_entry *entry);
+typedef int (*vhost_set_vring_iotlb_call_op)(struct vhost_dev *dev,
+                                             struct vhost_vring_file *file);
+typedef int (*vhost_run_iotlb_op)(struct vhost_dev *dev,
+                                  int *enalbed);
 
 typedef struct VhostOps {
     VhostBackendType backend_type;
@@ -100,6 +110,10 @@ typedef struct VhostOps {
     vhost_requires_shm_log_op vhost_requires_shm_log;
     vhost_migration_done_op vhost_migration_done;
     vhost_backend_can_merge_op vhost_backend_can_merge;
+    vhost_set_vring_iotlb_request_op vhost_set_vring_iotlb_request;
+    vhost_update_iotlb_op vhost_update_iotlb;
+    vhost_set_vring_iotlb_call_op vhost_set_vring_iotlb_call;
+    vhost_run_iotlb_op vhost_run_iotlb;
 } VhostOps;
 
 extern const VhostOps user_ops;

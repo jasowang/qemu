@@ -27,6 +27,32 @@ struct vhost_vring_file {
 
 };
 
+struct vhost_iotlb_entry {
+	__u64 iova;
+	__u64 size;
+	__u64 userspace_addr;
+	struct {
+#define VHOST_ACCESS_RO      0x1
+#define VHOST_ACCESS_WO      0x2
+#define VHOST_ACCESS_RW      0x3
+		__u8  perm;
+#define VHOST_IOTLB_MISS           1
+#define VHOST_IOTLB_UPDATE         2
+#define VHOST_IOTLB_INVALIDATE     3
+		__u8  type;
+#define VHOST_IOTLB_INVALID        0x1
+#define VHOST_IOTLB_VALID          0x2
+		__u8  valid;
+		__u8  u8_padding;
+		__u32 padding;
+	} flags;
+};
+
+struct vhost_vring_iotlb_entry {
+    unsigned int index;
+    __u64 userspace_addr;
+};
+
 struct vhost_vring_addr {
 	unsigned int index;
 	/* Option flags. */
@@ -126,6 +152,15 @@ struct vhost_memory {
 #define VHOST_SET_VRING_CALL _IOW(VHOST_VIRTIO, 0x21, struct vhost_vring_file)
 /* Set eventfd to signal an error */
 #define VHOST_SET_VRING_ERR _IOW(VHOST_VIRTIO, 0x22, struct vhost_vring_file)
+
+/* IOTLB */
+/* Specify an eventfd file descriptor to signle on IOTLB miss */
+#define VHOST_SET_VRING_IOTLB_CALL _IOW(VHOST_VIRTIO, 0x23, struct      \
+                                        vhost_vring_file)
+#define VHOST_SET_VRING_IOTLB_REQUEST _IOW(VHOST_VIRTIO, 0x25, struct   \
+                                           vhost_vring_iotlb_entry)
+#define VHOST_UPDATE_IOTLB _IOW(VHOST_VIRTIO, 0x24, struct vhost_iotlb_entry)
+#define VHOST_RUN_IOTLB _IOW(VHOST_VIRTIO, 0x26, int)
 
 /* VHOST_NET specific defines */
 
