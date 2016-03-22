@@ -1509,6 +1509,9 @@ bool memory_region_is_logging(MemoryRegion *mr, uint8_t client)
 
 void memory_region_register_iommu_notifier(MemoryRegion *mr, Notifier *n)
 {
+    if (mr->alias) {
+        memory_region_register_iommu_notifier(mr->alias, n);
+    }
     notifier_list_add(&mr->iommu_notify, n);
 }
 
