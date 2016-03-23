@@ -1821,8 +1821,10 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
 
     address_space_init(&proxy->modern_as, &proxy->modern_cfg, "virtio-pci-cfg-as");
 
-    if (pci_is_express(pci_dev) && pci_bus_is_express(pci_dev->bus) &&
-        !pci_bus_is_root(pci_dev->bus)) {
+    if (pci_is_express(pci_dev) && pci_bus_is_express(pci_dev->bus)) {
+        /* FIXME:
+         * &&!pci_bus_is_root(pci_dev->bus)) {
+         */
         int pos;
 
         pos = pcie_endpoint_cap_init(pci_dev, 0);
@@ -1836,6 +1838,12 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
          * PCI Power Management Interface Specification.
          */
         pci_set_word(pci_dev->config + pos + PCI_PM_PMC, 0x3);
+
+        if (proxy->flags & VIRTIO_PCI_FLAG_ATS) {
+            pcie_add_capability(pci_dev, PCI_EXT_CAP_ID_ATS, 0x1,
+                                256, PCI_EXT_CAP_ATS_SIZEOF);
+        }
+
     } else {
         /*
          * make future invocations of pci_is_express() return false
@@ -1886,6 +1894,8 @@ static Property virtio_pci_properties[] = {
                     VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY_BIT, false),
     DEFINE_PROP_BIT("x-disable-pcie", VirtIOPCIProxy, flags,
                     VIRTIO_PCI_FLAG_DISABLE_PCIE_BIT, false),
+    DEFINE_PROP_BIT("ats", VirtIOPCIProxy, flags,
+                    VIRTIO_PCI_FLAG_ATS_BIT, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

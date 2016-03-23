@@ -66,6 +66,7 @@ enum {
     VIRTIO_PCI_FLAG_MIGRATE_EXTRA_BIT,
     VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY_BIT,
     VIRTIO_PCI_FLAG_DISABLE_PCIE_BIT,
+    VIRTIO_PCI_FLAG_ATS_BIT,
 };
 
 /* Need to activate work-arounds for buggy guests at vmstate load. */
@@ -87,6 +88,9 @@ enum {
 /* have pio notification for modern device ? */
 #define VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY \
     (1 << VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY_BIT)
+
+/* address space translation service */
+#define VIRTIO_PCI_FLAG_ATS (1 << VIRTIO_PCI_FLAG_ATS_BIT)
 
 typedef struct {
     MSIMessage msg;
