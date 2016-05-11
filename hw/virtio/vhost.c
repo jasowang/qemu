@@ -927,6 +927,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     a = virtio_queue_get_desc_addr(vdev, idx);
     vq->desc = virtio_memory_map(vdev, a, &l, 0);
     if (!vq->desc || l != s) {
+        fprintf(stderr, "map desc\n");
         r = -ENOMEM;
         goto fail_alloc_desc;
     }
@@ -934,6 +935,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     a = virtio_queue_get_avail_addr(vdev, idx);
     vq->avail = virtio_memory_map(vdev, a, &l, 0);
     if (!vq->avail || l != s) {
+        fprintf(stderr, "map avail\n");
         r = -ENOMEM;
         goto fail_alloc_avail;
     }
@@ -941,6 +943,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     vq->used_phys = a = virtio_queue_get_used_addr(vdev, idx);
     vq->used = virtio_memory_map(vdev, a, &l, 1);
     if (!vq->used || l != s) {
+        fprintf(stderr, "map used\n");
         r = -ENOMEM;
         goto fail_alloc_used;
     }
@@ -949,6 +952,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     vq->ring_phys = a = virtio_queue_get_ring_addr(vdev, idx);
     vq->ring = virtio_memory_map(vdev, a, &l, 1);
     if (!vq->ring || l != s) {
+        fprintf(stderr, "map ring\n");
         r = -ENOMEM;
         goto fail_alloc_ring;
     }

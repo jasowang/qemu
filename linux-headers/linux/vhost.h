@@ -155,12 +155,12 @@ struct vhost_memory {
 
 /* IOTLB */
 /* Specify an eventfd file descriptor to signle on IOTLB miss */
-#define VHOST_SET_VRING_IOTLB_CALL _IOW(VHOST_VIRTIO, 0x23, struct      \
+#define VHOST_SET_VRING_IOTLB_CALL _IOW(VHOST_VIRTIO, 0x25, struct      \
                                         vhost_vring_file)
-#define VHOST_SET_VRING_IOTLB_REQUEST _IOW(VHOST_VIRTIO, 0x25, struct   \
+#define VHOST_SET_VRING_IOTLB_REQUEST _IOW(VHOST_VIRTIO, 0x26, struct   \
                                            vhost_vring_iotlb_entry)
-#define VHOST_UPDATE_IOTLB _IOW(VHOST_VIRTIO, 0x24, struct vhost_iotlb_entry)
-#define VHOST_RUN_IOTLB _IOW(VHOST_VIRTIO, 0x26, int)
+#define VHOST_UPDATE_IOTLB _IOW(VHOST_VIRTIO, 0x27, struct vhost_iotlb_entry)
+#define VHOST_RUN_IOTLB _IOW(VHOST_VIRTIO, 0x28, int)
 
 /* VHOST_NET specific defines */
 
