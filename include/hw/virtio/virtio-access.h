@@ -200,9 +200,15 @@ static inline void *virtio_memory_map(VirtIODevice *vdev, hwaddr addr,
 {
     AddressSpace *dma_as = virtio_get_dma_as(vdev);
 
-    return dma_memory_map(dma_as, addr, plen, is_write ?
-                          DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE);
+    if (dma_as == &address_space_memory) {
+      return dma_memory_map(dma_as, addr, plen, is_write ?
+                            DMA_DIRECTION_FROM_DEVICE :
+                            DMA_DIRECTION_TO_DEVICE);
+    } else {
+      return (void *)addr;
+    }
 }
+
 
 static inline void virtio_memory_unmap(VirtIODevice *vdev, void *buffer,
                                        hwaddr len, int is_write,
@@ -210,9 +216,11 @@ static inline void virtio_memory_unmap(VirtIODevice *vdev, void *buffer,
 {
     AddressSpace *dma_as = virtio_get_dma_as(vdev);
 
-    dma_memory_unmap(dma_as, buffer, len, is_write ?
-                     DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE,
-                     access_len);
+    if (dma_as == &address_space_memory) {
+      dma_memory_unmap(dma_as, buffer, len, is_write ?
+                       DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE,
+                       access_len);
+    }
 }
 
 #endif /* _QEMU_VIRTIO_ACCESS_H */

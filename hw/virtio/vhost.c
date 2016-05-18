@@ -925,6 +925,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
 
     s = l = virtio_queue_get_desc_size(vdev, idx);
     a = virtio_queue_get_desc_addr(vdev, idx);
+    /* FIXME: change the name to vhost_memory_map */
     vq->desc = virtio_memory_map(vdev, a, &l, 0);
     if (!vq->desc || l != s) {
         fprintf(stderr, "map desc\n");
@@ -1413,6 +1414,43 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     r = vhost_run_iotlb(hdev, NULL);
     if (r < 0) {
         goto fail_iotlb;
+    }
+
+    /* Update used ring information for IOTLB to work correctly */
+    for (i = 0; i < hdev->nvqs; ++i)
+    {
+        IOMMUTLBEntry iotlb;
+        struct vhost_iotlb_entry reply;
+        struct vhost_virtqueue *vq = hdev->vqs + i;
+        rcu_read_lock();
+
+        iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(vdev),
+                                              vq->used_phys,
+                                              true);
+        if (iotlb.target_as != NULL) {
+            int ret;
+            if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
+                                           &reply.userspace_addr,
+                                           &reply.size)) {
+                fprintf(stderr, "fail to look up!\n");
+            }
+            reply.iova = vq->used_phys & ~iotlb.addr_mask;
+            reply.size = MIN(iotlb.addr_mask + 1, reply.size);
+            reply.flags.perm = VHOST_ACCESS_RW;
+            reply.flags.type = VHOST_IOTLB_UPDATE;
+            reply.flags.valid = VHOST_IOTLB_VALID;
+
+            fprintf(stderr, "used %lx iova %lx size %lx\n",
+                    (unsigned long)vq->used_phys,
+                    (unsigned long)reply.iova,
+                    (unsigned long)reply.size);
+            ret = vhost_dev_update_iotlb(hdev, &reply);
+            fprintf(stderr, "ret is %d\n", ret);
+        } else {
+            fprintf(stderr, "can't find iotlb entry!\n");
+        }
+
+        rcu_read_unlock();
     }
 
     hdev->vdev = vdev;
