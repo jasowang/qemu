@@ -53,6 +53,30 @@ struct vhost_vring_iotlb_entry {
     __u64 userspace_addr;
 };
 
+struct vhost_iotlb_msg {
+  __u64 iova;
+  __u64 size;
+  __u64 uaddr;
+#define VHOST_ACCESS_RO      0x1
+#define VHOST_ACCESS_WO      0x2
+#define VHOST_ACCESS_RW      0x3
+  __u8 perm;
+#define VHOST_IOTLB_MISS           1
+#define VHOST_IOTLB_UPDATE         2
+#define VHOST_IOTLB_INVALIDATE     3
+#define VHOST_IOTLB_ACCESS_FAIL    4
+  __u8 type;
+};
+
+#define VHOST_IOTLB_MSG 1
+
+struct vhost_msg {
+  int type;
+  union {
+    struct vhost_iotlb_msg iotlb;
+  };
+};
+
 struct vhost_vring_addr {
 	unsigned int index;
 	/* Option flags. */

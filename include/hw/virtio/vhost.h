@@ -20,8 +20,6 @@ struct vhost_virtqueue {
     unsigned long long ring_phys;
     unsigned ring_size;
     EventNotifier masked_notifier;
-    EventNotifier iotlb_notifier;
-    struct vhost_iotlb_entry *iotlb_req;
     struct vhost_dev *dev;
 };
 
@@ -91,4 +89,5 @@ uint64_t vhost_get_features(struct vhost_dev *hdev, const int *feature_bits,
 void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
                         uint64_t features);
 bool vhost_has_free_slot(void);
+void vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write);
 #endif

@@ -167,22 +167,6 @@ static int vhost_kernel_get_vq_index(struct vhost_dev *dev, int idx)
     return idx - dev->vq_index;
 }
 
-static int vhost_kernel_set_vring_iotlb_request(struct vhost_dev *dev,
-                                                struct
-                                                vhost_vring_iotlb_entry
-                                                *entry)
-{
-    int r = vhost_kernel_call(dev, VHOST_SET_VRING_IOTLB_REQUEST, entry);
-    return r;
-}
-
-static int vhost_kernel_update_iotlb(struct vhost_dev *dev,
-                                     struct vhost_iotlb_entry *entry)
-{
-    int r = vhost_kernel_call(dev, VHOST_UPDATE_IOTLB, entry);
-    return r;
-}
-
 static int vhost_kernel_run_iotlb(struct vhost_dev *dev,
                                   int *enabled)
 {
@@ -190,10 +174,112 @@ static int vhost_kernel_run_iotlb(struct vhost_dev *dev,
     return r;
 }
 
-static int vhost_kernel_set_vring_iotlb_call(struct vhost_dev *dev,
-                                             struct vhost_vring_file *file)
+static void vhost_kernel_iotlb_read(void *opaque)
 {
-    return vhost_kernel_call(dev, VHOST_SET_VRING_IOTLB_CALL, file);
+    struct vhost_dev *dev = opaque;
+    struct vhost_msg msg;
+    ssize_t len;
+
+    while((len = read((uintptr_t)dev->opaque, &msg, sizeof msg)) > 0) {
+        if (len < sizeof msg) {
+            fprintf(stderr, "wrong vhost message len! %d\n", (int)len);
+            break;
+        }
+
+        struct vhost_iotlb_msg *imsg = &msg.iotlb;
+        fprintf(stderr, "read %d\n", (int)len);
+        if (len < sizeof msg) {
+            fprintf(stderr, "wrong vhost message len! %d\n", (int)len);
+            break;
+        }
+        if (msg.type != VHOST_IOTLB_MSG) {
+            fprintf(stderr, "unknown vhost iotlb message type!\n");
+            break;
+        }
+        switch (imsg->type) {
+        case VHOST_IOTLB_MISS:
+            /* FIXME: RW */
+            vhost_device_iotlb_miss(dev, imsg->iova,
+                                    imsg->perm != VHOST_ACCESS_RO);
+            break;
+        case VHOST_IOTLB_UPDATE:
+        case VHOST_IOTLB_INVALIDATE:
+            fprintf(stderr, "wrong type!\n");
+            break;
+        case VHOST_IOTLB_ACCESS_FAIL:
+            /* FIXME: report device iotlb error */
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static int vhost_kernel_update_device_iotlb(struct vhost_dev *dev,
+                                            uint64_t iova, uint64_t uaddr,
+                                            uint64_t len,
+                                            IOMMUAccessFlags perm)
+{
+    struct vhost_msg msg = {
+        .type = VHOST_IOTLB_MSG,
+        .iotlb = {
+            .iova = iova,
+            .uaddr = uaddr,
+            .size = len,
+            .type = VHOST_IOTLB_UPDATE,
+        }
+    };
+
+    switch (perm) {
+    case IOMMU_RO:
+        msg.iotlb.perm = VHOST_ACCESS_RO;
+        break;
+    case IOMMU_WO:
+        msg.iotlb.perm = VHOST_ACCESS_WO;
+        break;
+    case IOMMU_RW:
+        msg.iotlb.perm = VHOST_ACCESS_RW;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    if (write((uintptr_t)dev->opaque, &msg, sizeof msg) != sizeof msg) {
+        fprintf(stderr, "fail to update device iotlb!\n");
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int vhost_kernel_invalidate_device_iotlb(struct vhost_dev *dev,
+                                                uint64_t iova, uint64_t len)
+{
+    struct vhost_msg msg = {
+        .type = VHOST_IOTLB_MSG,
+        .iotlb = {
+            .iova = iova,
+            .size = len,
+            .type = VHOST_IOTLB_INVALIDATE,
+        }
+    };
+
+    if (write((uintptr_t)dev->opaque, &msg, sizeof msg) != sizeof msg) {
+        fprintf(stderr, "fail to invalidate device iotlb!\n");
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static void vhost_kernel_set_iotlb_callback(struct vhost_dev *dev,
+                                           int enabled)
+{
+    if (enabled)
+        qemu_set_fd_handler((uintptr_t)dev->opaque,
+                            vhost_kernel_iotlb_read, NULL, dev);
+    else
+        qemu_set_fd_handler((uintptr_t)dev->opaque, NULL, NULL, NULL);
 }
 
 static const VhostOps kernel_ops = {
@@ -219,10 +305,10 @@ static const VhostOps kernel_ops = {
         .vhost_set_owner = vhost_kernel_set_owner,
         .vhost_reset_device = vhost_kernel_reset_device,
         .vhost_get_vq_index = vhost_kernel_get_vq_index,
-        .vhost_set_vring_iotlb_request = vhost_kernel_set_vring_iotlb_request,
-        .vhost_update_iotlb = vhost_kernel_update_iotlb,
-        .vhost_set_vring_iotlb_call = vhost_kernel_set_vring_iotlb_call,
         .vhost_run_iotlb = vhost_kernel_run_iotlb,
+        .vhost_set_iotlb_callback = vhost_kernel_set_iotlb_callback,
+        .vhost_update_device_iotlb = vhost_kernel_update_device_iotlb,
+        .vhost_invalidate_device_iotlb = vhost_kernel_invalidate_device_iotlb,
 };
 
 int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)

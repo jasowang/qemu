@@ -408,6 +408,7 @@ static int vhost_verify_ring_mappings(struct vhost_dev *dev,
                                       uint64_t start_addr,
                                       uint64_t size)
 {
+    /* FIXME: */
     #if 0
     int i;
     int r = 0;
@@ -666,14 +667,6 @@ static int vhost_dev_set_features(struct vhost_dev *dev, bool enable_log)
     return r < 0 ? -errno : 0;
 }
 
-static int vhost_dev_update_iotlb(struct vhost_dev *dev,
-                                  struct vhost_iotlb_entry *entry)
-{
-    int r;
-    r = dev->vhost_ops->vhost_update_iotlb(dev, entry);
-    return r < 0 ? -errno : 0;
-}
-
 static int vhost_run_iotlb(struct vhost_dev *dev,
                            int *enabled)
 {
@@ -819,7 +812,8 @@ static int vhost_virtqueue_set_vring_endian_legacy(struct vhost_dev *dev,
 }
 
 static int vhost_memory_region_lookup(struct vhost_dev *hdev,
-                                      __u64 gpa, __u64 *uaddr, __u64 *len)
+                                      uint64_t gpa, uint64_t *uaddr,
+                                      uint64_t *len)
 {
     int i;
 
@@ -837,51 +831,34 @@ static int vhost_memory_region_lookup(struct vhost_dev *hdev,
     return -EFAULT;
 }
 
-static void vhost_device_iotlb_request(void *opaque)
+void vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write)
 {
     IOMMUTLBEntry iotlb;
-    struct vhost_virtqueue *vq = opaque;
-    struct vhost_dev *hdev = vq->dev;
-    struct vhost_iotlb_entry *request = vq->iotlb_req;
-    struct vhost_iotlb_entry reply = *request;
+    uint64_t uaddr, len;
 
     rcu_read_lock();
 
-    event_notifier_test_and_clear(&vq->iotlb_notifier);
-
-    reply.flags.type = VHOST_IOTLB_UPDATE;
-    reply.flags.valid = VHOST_IOTLB_INVALID;
-
-    if (request->flags.type != VHOST_IOTLB_MISS) {
-        goto done;
-    }
-
-    iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(hdev->vdev),
-                                          request->iova,
-                                          false);
+    iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(dev->vdev),
+                                          iova, write);
     if (iotlb.target_as != NULL) {
-        if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
-                                       &reply.userspace_addr,
-                                       &reply.size)) {
-            goto done;
+        if (vhost_memory_region_lookup(dev, iotlb.translated_addr,
+                                       &uaddr, &len)) {
+            fprintf(stderr, "fail to lookup the translated address "
+                    "%llx len %llx\n", (unsigned long long)uaddr,
+                    (unsigned long long)len);
+            goto out;
         }
-        reply.iova = reply.iova & ~iotlb.addr_mask;
-        reply.size = MIN(iotlb.addr_mask + 1, reply.size);
-        if (iotlb.perm == IOMMU_RO) {
-            reply.flags.perm = VHOST_ACCESS_RO;
-        } else if (iotlb.perm == IOMMU_WO) {
-            reply.flags.perm = VHOST_ACCESS_WO;
-        } else if (iotlb.perm == IOMMU_RW) {
-            reply.flags.perm = VHOST_ACCESS_RW;
-        } else {
-            fprintf(stderr, "unknown iotlb perm!\n");
-        }
-        reply.flags.type = VHOST_IOTLB_UPDATE;
-        reply.flags.valid = VHOST_IOTLB_VALID;
-    }
 
-done:
-    vhost_dev_update_iotlb(hdev, &reply);
+        len = MIN(iotlb.addr_mask + 1, len);
+        iova = iova & ~iotlb.addr_mask;
+
+        if (dev->vhost_ops->vhost_update_device_iotlb(dev, iova, uaddr,
+                                                      len, iotlb.perm)) {
+            fprintf(stderr, "fail to update device iotlb\n");
+            goto out;
+        }
+    }
+out:
     rcu_read_unlock();
 }
 
@@ -1061,9 +1038,6 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     struct vhost_vring_file file = {
         .index = vhost_vq_index,
     };
-    struct vhost_vring_iotlb_entry request = {
-        .index = vhost_vq_index,
-    };
     int r = event_notifier_init(&vq->masked_notifier, 0);
     if (r < 0) {
         return r;
@@ -1076,36 +1050,9 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
         goto fail_call;
     }
 
-    r = event_notifier_init(&vq->iotlb_notifier, 0);
-    if (r < 0) {
-        r = -errno;
-        goto fail_call;
-    }
-
-    file.fd = event_notifier_get_fd(&vq->iotlb_notifier);
-    r = dev->vhost_ops->vhost_set_vring_iotlb_call(dev, &file);
-    if (r) {
-        r = -errno;
-        goto fail_iotlb;
-    }
-    qemu_set_fd_handler(event_notifier_get_fd(&vq->iotlb_notifier),
-                        vhost_device_iotlb_request, NULL, vq);
-
-    vq->iotlb_req = g_malloc0(sizeof(*vq->iotlb_req));
-    request.userspace_addr = (uint64_t)(unsigned long)vq->iotlb_req;
-    r = dev->vhost_ops->vhost_set_vring_iotlb_request(dev, &request);
-    if (r) {
-        r = -errno;
-        goto fail_req;
-    }
-
     vq->dev = dev;
 
     return 0;
-fail_req:
-    qemu_set_fd_handler(file.fd, NULL, NULL, NULL);
-fail_iotlb:
-    event_notifier_cleanup(&vq->iotlb_notifier);
 fail_call:
     event_notifier_cleanup(&vq->masked_notifier);
     return r;
@@ -1113,24 +1060,19 @@ fail_call:
 
 static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
 {
-    qemu_set_fd_handler(event_notifier_get_fd(&vq->iotlb_notifier),
-                        NULL, NULL, NULL);
     event_notifier_cleanup(&vq->masked_notifier);
-    event_notifier_cleanup(&vq->iotlb_notifier);
-    g_free(vq->iotlb_req);
 }
 
 static void vhost_iommu_unmap_notify(Notifier *n, void *data)
 {
     struct vhost_dev *hdev = container_of(n, struct vhost_dev, n);
     IOMMUTLBEntry *iotlb = data;
-    struct vhost_iotlb_entry inv = {
-        .flags.type = VHOST_IOTLB_INVALIDATE,
-        .iova = iotlb->iova,
-        .size = iotlb->addr_mask + 1,
-    };
 
-    vhost_dev_update_iotlb(hdev, &inv);
+    if (hdev->vhost_ops->vhost_invalidate_device_iotlb(hdev,
+                                                       iotlb->iova,
+                                                       iotlb->addr_mask +1)) {
+        fprintf(stderr, "Fail to invalidate device iotlb!\n");
+    }
 }
 
 int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
@@ -1169,6 +1111,8 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
     if (r < 0) {
         goto fail;
     }
+
+    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, true);
 
     for (i = 0; i < hdev->nvqs; ++i) {
         r = vhost_virtqueue_init(hdev, hdev->vqs + i, hdev->vq_index + i);
@@ -1225,6 +1169,7 @@ fail_vq:
         vhost_virtqueue_cleanup(hdev->vqs + i);
     }
 fail:
+    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, false);
     r = -errno;
     hdev->vhost_ops->vhost_backend_cleanup(hdev);
     QLIST_REMOVE(hdev, entry);
@@ -1416,44 +1361,14 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
         goto fail_iotlb;
     }
 
+    hdev->vdev = vdev;
+
     /* Update used ring information for IOTLB to work correctly */
-    for (i = 0; i < hdev->nvqs; ++i)
-    {
-        IOMMUTLBEntry iotlb;
-        struct vhost_iotlb_entry reply;
+    for (i = 0; i < hdev->nvqs; ++i) {
         struct vhost_virtqueue *vq = hdev->vqs + i;
-        rcu_read_lock();
-
-        iotlb = address_space_get_iotlb_entry(virtio_get_dma_as(vdev),
-                                              vq->used_phys,
-                                              true);
-        if (iotlb.target_as != NULL) {
-            int ret;
-            if (vhost_memory_region_lookup(hdev, iotlb.translated_addr,
-                                           &reply.userspace_addr,
-                                           &reply.size)) {
-                fprintf(stderr, "fail to look up!\n");
-            }
-            reply.iova = vq->used_phys & ~iotlb.addr_mask;
-            reply.size = MIN(iotlb.addr_mask + 1, reply.size);
-            reply.flags.perm = VHOST_ACCESS_RW;
-            reply.flags.type = VHOST_IOTLB_UPDATE;
-            reply.flags.valid = VHOST_IOTLB_VALID;
-
-            fprintf(stderr, "used %lx iova %lx size %lx\n",
-                    (unsigned long)vq->used_phys,
-                    (unsigned long)reply.iova,
-                    (unsigned long)reply.size);
-            ret = vhost_dev_update_iotlb(hdev, &reply);
-            fprintf(stderr, "ret is %d\n", ret);
-        } else {
-            fprintf(stderr, "can't find iotlb entry!\n");
-        }
-
-        rcu_read_unlock();
+        vhost_device_iotlb_miss(hdev, vq->used_phys, true);
     }
 
-    hdev->vdev = vdev;
     return 0;
 fail_iotlb:
     if (hdev->vhost_ops->vhost_set_vring_enable) {
