@@ -656,17 +656,23 @@ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
     return 0;
 }
 
-static int vhost_dev_set_features(struct vhost_dev *dev, bool enable_log)
+static int vhost_dev_set_features(struct vhost_dev *dev,
+                                  bool enable_log)
 {
     uint64_t features = dev->acked_features;
+    bool has_iommu = virtio_get_dma_as(dev->vdev) != &address_space_memory;
     int r;
     if (enable_log) {
         features |= 0x1ULL << VHOST_F_LOG_ALL;
+    }
+    if (has_iommu) {
+        features |= 0x1ULL << VHOST_F_DEVICE_IOTLB;
     }
     r = dev->vhost_ops->vhost_set_features(dev, features);
     return r < 0 ? -errno : 0;
 }
 
+#if 0
 static int vhost_run_iotlb(struct vhost_dev *dev,
                            int *enabled)
 {
@@ -674,6 +680,7 @@ static int vhost_run_iotlb(struct vhost_dev *dev,
     r = dev->vhost_ops->vhost_run_iotlb(dev, enabled);
     return r < 0 ? -errno : 0;
 }
+#endif
 
 static int vhost_dev_set_log(struct vhost_dev *dev, bool enable_log)
 {
@@ -1315,6 +1322,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     int i, r;
 
     hdev->started = true;
+    hdev->vdev = vdev;
 
     r = vhost_dev_set_features(hdev, hdev->log_enabled);
     if (r < 0) {
@@ -1355,6 +1363,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
         }
     }
 
+    #if 0
     /* FIXME: conditionally */
     r = vhost_run_iotlb(hdev, NULL);
     if (r < 0) {
@@ -1362,6 +1371,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     }
 
     hdev->vdev = vdev;
+    #endif
 
     /* Update used ring information for IOTLB to work correctly */
     for (i = 0; i < hdev->nvqs; ++i) {
@@ -1370,10 +1380,12 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     }
 
     return 0;
+#if 0
 fail_iotlb:
     if (hdev->vhost_ops->vhost_set_vring_enable) {
         hdev->vhost_ops->vhost_set_vring_enable(hdev, 0);
     }
+#endif
 fail_log:
     vhost_log_put(hdev, false);
 fail_vq:
