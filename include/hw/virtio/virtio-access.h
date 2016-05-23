@@ -195,12 +195,24 @@ static inline void virtio_tswap64s(VirtIODevice *vdev, uint64_t *s)
     *s = virtio_tswap64(vdev, *s);
 }
 
+static inline bool mr_has_iommu_ops(MemoryRegion *mr)
+{
+    if (mr->alias) {
+        return mr_has_iommu_ops(mr->alias);
+    }
+
+    if (mr->iommu_ops)
+        return true;
+    else
+        return false;
+}
+
 static inline void *virtio_memory_map(VirtIODevice *vdev, hwaddr addr,
                                       hwaddr *plen, int is_write)
 {
     AddressSpace *dma_as = virtio_get_dma_as(vdev);
 
-    if (dma_as == &address_space_memory) {
+    if (!mr_has_iommu_ops(dma_as->root)) {
       return dma_memory_map(dma_as, addr, plen, is_write ?
                             DMA_DIRECTION_FROM_DEVICE :
                             DMA_DIRECTION_TO_DEVICE);
@@ -216,7 +228,7 @@ static inline void virtio_memory_unmap(VirtIODevice *vdev, void *buffer,
 {
     AddressSpace *dma_as = virtio_get_dma_as(vdev);
 
-    if (dma_as == &address_space_memory) {
+    if (!mr_has_iommu_ops(dma_as->root)) {
       dma_memory_unmap(dma_as, buffer, len, is_write ?
                        DMA_DIRECTION_FROM_DEVICE : DMA_DIRECTION_TO_DEVICE,
                        access_len);

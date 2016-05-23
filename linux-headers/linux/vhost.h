@@ -74,6 +74,7 @@ struct vhost_msg {
   int type;
   union {
     struct vhost_iotlb_msg iotlb;
+    __u8 padding[64];
   };
 };
 
@@ -199,7 +200,7 @@ struct vhost_memory {
 #define VHOST_F_LOG_ALL 26
 /* vhost-net should add virtio_net_hdr for RX, and strip for TX packets. */
 #define VHOST_NET_F_VIRTIO_NET_HDR 27
-#define VHOST_F_DEVICE_IOTLB 28
+#define VHOST_F_DEVICE_IOTLB 63
 /* VHOST_SCSI specific definitions */
 
 /*

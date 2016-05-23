@@ -660,14 +660,16 @@ static int vhost_dev_set_features(struct vhost_dev *dev,
                                   bool enable_log)
 {
     uint64_t features = dev->acked_features;
-    bool has_iommu = virtio_get_dma_as(dev->vdev) != &address_space_memory;
+    bool has_iommu = mr_has_iommu_ops(virtio_get_dma_as(dev->vdev)->root);
     int r;
     if (enable_log) {
         features |= 0x1ULL << VHOST_F_LOG_ALL;
     }
     if (has_iommu) {
+        fprintf(stderr, "has\n");
         features |= 0x1ULL << VHOST_F_DEVICE_IOTLB;
-    }
+    } else
+        fprintf(stderr, "hasn't\n");
     r = dev->vhost_ops->vhost_set_features(dev, features);
     return r < 0 ? -errno : 0;
 }
@@ -1373,12 +1375,13 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     hdev->vdev = vdev;
     #endif
 
-    /* Update used ring information for IOTLB to work correctly */
-    for (i = 0; i < hdev->nvqs; ++i) {
-        struct vhost_virtqueue *vq = hdev->vqs + i;
-        vhost_device_iotlb_miss(hdev, vq->used_phys, true);
+    if (mr_has_iommu_ops(virtio_get_dma_as(vdev)->root)) {
+        /* Update used ring information for IOTLB to work correctly */
+        for (i = 0; i < hdev->nvqs; ++i) {
+            struct vhost_virtqueue *vq = hdev->vqs + i;
+            vhost_device_iotlb_miss(hdev, vq->used_phys, true);
+        }
     }
-
     return 0;
 #if 0
 fail_iotlb:
