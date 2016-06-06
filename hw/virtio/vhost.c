@@ -1121,8 +1121,6 @@ int vhost_dev_init(struct vhost_dev *hdev, void *opaque,
         goto fail;
     }
 
-    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, true);
-
     for (i = 0; i < hdev->nvqs; ++i) {
         r = vhost_virtqueue_init(hdev, hdev->vqs + i, hdev->vq_index + i);
         if (r < 0) {
@@ -1178,7 +1176,6 @@ fail_vq:
         vhost_virtqueue_cleanup(hdev->vqs + i);
     }
 fail:
-    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, false);
     r = -errno;
     hdev->vhost_ops->vhost_backend_cleanup(hdev);
     QLIST_REMOVE(hdev, entry);
@@ -1375,6 +1372,8 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     hdev->vdev = vdev;
     #endif
 
+    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, true);
+
     if (mr_has_iommu_ops(virtio_get_dma_as(vdev)->root)) {
         /* Update used ring information for IOTLB to work correctly */
         for (i = 0; i < hdev->nvqs; ++i) {
@@ -1411,6 +1410,8 @@ fail_features:
 void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
 {
     int i;
+
+    hdev->vhost_ops->vhost_set_iotlb_callback(hdev, false);
 
     for (i = 0; i < hdev->nvqs; ++i) {
         vhost_virtqueue_stop(hdev,
