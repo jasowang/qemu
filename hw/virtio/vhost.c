@@ -666,10 +666,8 @@ static int vhost_dev_set_features(struct vhost_dev *dev,
         features |= 0x1ULL << VHOST_F_LOG_ALL;
     }
     if (has_iommu) {
-        fprintf(stderr, "has\n");
         features |= 0x1ULL << VHOST_F_DEVICE_IOTLB;
-    } else
-        fprintf(stderr, "hasn't\n");
+    }
     r = dev->vhost_ops->vhost_set_features(dev, features);
     return r < 0 ? -errno : 0;
 }

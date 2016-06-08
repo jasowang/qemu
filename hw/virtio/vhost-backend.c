@@ -187,7 +187,7 @@ static void vhost_kernel_iotlb_read(void *opaque)
         }
 
         struct vhost_iotlb_msg *imsg = &msg.iotlb;
-        fprintf(stderr, "read %d\n", (int)len);
+        //fprintf(stderr, "read %d\n", (int)len);
         if (len < sizeof msg) {
             fprintf(stderr, "wrong vhost message len! %d\n", (int)len);
             break;
