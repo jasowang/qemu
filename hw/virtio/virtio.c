@@ -925,6 +925,8 @@ void *virtqueue_pop(VirtQueue *vq, size_t sz)
     do {
         bool map_ok;
 
+        fprintf(stderr, "desc.addr %"PRIx64" desc.len %"PRIx32"\n",
+                desc.addr, desc.len);
         if (desc.flags & VRING_DESC_F_WRITE) {
             map_ok = virtqueue_map_desc(vdev, &in_num, addr + out_num,
                                         iov + out_num,

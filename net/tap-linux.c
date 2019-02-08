@@ -30,11 +30,15 @@
 
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <linux/filter.h>
+#include <linux/bpf.h>
+#include <linux/bpf_common.h>
 
 #include "sysemu/sysemu.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/cutils.h"
+#include "net/libbpf.h"
 
 #define PATH_NET_TUN "/dev/net/tun"
 
@@ -312,5 +316,50 @@ int tap_fd_get_ifname(int fd, char *ifname)
     }
 
     pstrcpy(ifname, sizeof(ifr.ifr_name), ifr.ifr_name);
+    return 0;
+}
+
+//280
+#define __NR_bpf 321
+#define BPF_PROG_TYPE_XDP 6
+
+int tap_fd_attach_ebpf(int fd, int len, char *insns)
+{
+    struct bpf_insn *prog = (struct bpf_insn *)insns;
+    static char bpf_log_buf[65536];
+    static const char bpf_license[] = "GPL";
+    int bpf_fd;
+    union bpf_attr attr;
+    int i, ret;
+
+    memset(&attr, 0, sizeof(attr));
+
+    attr.prog_type = BPF_PROG_TYPE_XDP;
+    attr.insn_cnt = len / sizeof(prog[0]);
+    attr.insns = (unsigned long) prog;
+    attr.license = (unsigned long) &bpf_license;
+    attr.log_buf = (unsigned long) &bpf_log_buf;
+    attr.log_size = sizeof(bpf_log_buf);
+    attr.log_level = 8;
+
+    for (i = 0; i < attr.insn_cnt; i++) {
+        fprintf(stderr, "insn %d opcode %x\n", i, prog[i].code);
+    }
+
+    fprintf(stderr, "insn length %d\n", attr.insn_cnt);
+    bpf_fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
+    if (bpf_fd < 0) {
+        fprintf(stderr, "BPF_LOAD_PROG_LOAD %d\n", bpf_fd);
+        fprintf(stderr, "%s", bpf_log_buf);
+        return -EFAULT;
+    }
+
+    ret = ioctl(fd, TUNSETOFFLOADEDXDP, &bpf_fd);
+    if (ret) {
+        fprintf(stderr, "Fail to set offloaded XDP!\n");
+        fprintf(stderr, "%s", bpf_log_buf);
+        return -EFAULT;
+    }
+
     return 0;
 }

@@ -34,6 +34,8 @@ int tap_disable(NetClientState *nc);
 
 int tap_get_fd(NetClientState *nc);
 
+int tap_attach_ebpf(NetClientState *nc, int len, char *insns);
+
 struct vhost_net;
 struct vhost_net *tap_get_vhost_net(NetClientState *nc);
 

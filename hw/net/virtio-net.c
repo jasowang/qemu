@@ -27,6 +27,7 @@
 #include "hw/virtio/virtio-access.h"
 #include "migration/misc.h"
 #include "standard-headers/linux/ethtool.h"
+#include "net/libbpf.h"
 
 #define VIRTIO_NET_VM_VERSION    11
 
@@ -597,6 +598,21 @@ static int peer_attach(VirtIONet *n, int index)
     return tap_enable(nc->peer);
 }
 
+static int peer_attach_ebpf(VirtIONet *n, int len, char *insns)
+{
+    NetClientState *nc = qemu_get_subqueue(n->nic, 0);
+
+    if (!nc->peer) {
+        return 0;
+    }
+
+    if (nc->peer->info->type != NET_CLIENT_DRIVER_TAP) {
+        return 0;
+    }
+
+    return tap_attach_ebpf(nc->peer, len, insns);
+}
+
 static int peer_detach(VirtIONet *n, int index)
 {
     NetClientState *nc = qemu_get_subqueue(n->nic, index);
@@ -848,6 +864,35 @@ static int virtio_net_handle_offloads(VirtIONet *n, uint8_t cmd,
     }
 }
 
+static int virtio_net_handle_ebpf(VirtIONet *n, uint8_t cmd,
+                                  struct iovec *iov, unsigned int iov_cnt)
+{
+    char prog[65536];
+    size_t s;
+    int err;
+    int i;
+
+    if (cmd == VIRTIO_NET_CTRL_EBPF_SET_OFFLOAD_PROG) {
+        struct bpf_insn *insn = (struct bpf_insn *)prog;
+        s = iov_to_buf(iov, iov_cnt, 0, &prog, sizeof(prog));
+        fprintf(stderr, "sizeof %d\n", (int)sizeof(struct bpf_insn));
+        fprintf(stderr, "load ebpf prog %d insn len %d\n", (int)s,
+                (int)(s / sizeof(struct bpf_insn)));
+
+        for (i = 0; i < s / sizeof(struct bpf_insn); i++) {
+            fprintf(stderr, "insn %d code %x\n", i, insn[i].code);
+        }
+
+        err = peer_attach_ebpf(n, s, prog);
+        if (err)
+            return VIRTIO_NET_ERR;
+
+        return VIRTIO_NET_OK;
+    }
+
+    return VIRTIO_NET_ERR;
+}
+
 static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
                                  struct iovec *iov, unsigned int iov_cnt)
 {
@@ -1035,6 +1080,8 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
     struct iovec *iov, *iov2;
     unsigned int iov_cnt;
 
+    fprintf(stderr, "ctrl!\n");
+
     for (;;) {
         elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
         if (!elem) {
@@ -1066,6 +1113,9 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
             status = virtio_net_handle_mq(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_GUEST_OFFLOADS) {
             status = virtio_net_handle_offloads(n, ctrl.cmd, iov, iov_cnt);
+        } else if (ctrl.class == VIRTIO_NET_CTRL_EBPF) {
+            fprintf(stderr, "ebpf!\n");
+            status = virtio_net_handle_ebpf(n, ctrl.cmd, iov, iov_cnt);;
         }
 
         s = iov_from_buf(elem->in_sg, elem->in_num, 0, &status, sizeof(status));
@@ -1076,6 +1126,7 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         g_free(iov2);
         g_free(elem);
     }
+    fprintf(stderr, "done!\n");
 }
 
 /* RX */

@@ -967,6 +967,13 @@ int tap_enable(NetClientState *nc)
     }
 }
 
+int tap_attach_ebpf(NetClientState *nc, int len, char *insns)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+
+    return tap_fd_attach_ebpf(s->fd, len, insns);
+}
+
 int tap_disable(NetClientState *nc)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);

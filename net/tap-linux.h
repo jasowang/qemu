@@ -50,4 +50,5 @@
 #define TUN_F_TSO_ECN	0x08	/* I can handle TSO with ECN bits. */
 #define TUN_F_UFO	0x10	/* I can handle UFO packets */
 
+#define TUNSETOFFLOADEDXDP _IOR('T', 226, int)
 #endif /* QEMU_TAP_LINUX_H */

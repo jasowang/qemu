@@ -261,4 +261,15 @@ struct virtio_net_ctrl_mq {
 #define VIRTIO_NET_CTRL_GUEST_OFFLOADS   5
 #define VIRTIO_NET_CTRL_GUEST_OFFLOADS_SET        0
 
+/* Control eBPF offloads
+ *
+ */
+
+struct virtio_net_ctrl_ebpf {
+	char insn[0];
+};
+
+#define VIRTIO_NET_CTRL_EBPF 6
+#define VIRTIO_NET_CTRL_EBPF_SET_OFFLOAD_PROG 0
+
 #endif /* _LINUX_VIRTIO_NET_H */
