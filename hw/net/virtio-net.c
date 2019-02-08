@@ -29,6 +29,94 @@
 #include "standard-headers/linux/ethtool.h"
 #include "net/libbpf.h"
 
+/* For eBPF, hacks FIXME */
+#include <linux/filter.h>
+#include <linux/bpf.h>
+#include <linux/bpf_common.h>
+#include "net/libbpf.h"
+
+#define __NR_bpf 321
+
+struct bpf_create_map_attr {
+        const char *name;
+        enum bpf_map_type map_type;
+        __u32 map_flags;
+        __u32 key_size;
+        __u32 value_size;
+        __u32 max_entries;
+        __u32 numa_node;
+        __u32 btf_fd;
+        __u32 btf_key_type_id;
+        __u32 btf_value_type_id;
+        __u32 map_ifindex;
+};
+
+static inline __u64 ptr_to_u64(const void *ptr)
+{
+	return (__u64) (unsigned long) ptr;
+}
+
+static int bpf_create_map_xattr(const struct bpf_create_map_attr *create_attr)
+{
+	__u32 name_len = create_attr->name ? strlen(create_attr->name) : 0;
+	union bpf_attr attr;
+
+	memset(&attr, '\0', sizeof(attr));
+
+	attr.map_type = create_attr->map_type;
+	attr.key_size = create_attr->key_size;
+	attr.value_size = create_attr->value_size;
+	attr.max_entries = create_attr->max_entries;
+	attr.map_flags = create_attr->map_flags;
+	memcpy(attr.map_name, create_attr->name,
+	       MIN(name_len, BPF_OBJ_NAME_LEN - 1));
+	attr.numa_node = create_attr->numa_node;
+	attr.btf_fd = create_attr->btf_fd;
+	attr.btf_key_type_id = create_attr->btf_key_type_id;
+	attr.btf_value_type_id = create_attr->btf_value_type_id;
+	attr.map_ifindex = create_attr->map_ifindex;
+
+	return syscall(__NR_bpf, BPF_MAP_CREATE, &attr, sizeof(attr));
+}
+
+static int bpf_create_map(enum bpf_map_type map_type, int key_size,
+                   int value_size, int max_entries, __u32 map_flags)
+{
+	struct bpf_create_map_attr map_attr = {};
+
+	map_attr.map_type = map_type;
+	map_attr.map_flags = map_flags;
+	map_attr.key_size = key_size;
+	map_attr.value_size = value_size;
+	map_attr.max_entries = max_entries;
+
+	return bpf_create_map_xattr(&map_attr);
+}
+
+static int bpf_map_lookup_elem(int fd, const void *key, void *value)
+{
+	union bpf_attr attr;
+
+	bzero(&attr, sizeof(attr));
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.value = ptr_to_u64(value);
+
+	return syscall(__NR_bpf, BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
+}
+
+static int bpf_map_get_next_key(int fd, const void *key, void *next_key)
+{
+	union bpf_attr attr;
+
+	bzero(&attr, sizeof(attr));
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.next_key = ptr_to_u64(next_key);
+
+	return syscall(__NR_bpf, BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
+}
+
 #define VIRTIO_NET_VM_VERSION    11
 
 #define MAC_TABLE_ENTRIES    64
@@ -864,29 +952,95 @@ static int virtio_net_handle_offloads(VirtIONet *n, uint8_t cmd,
     }
 }
 
+static int virtio_net_handle_ebpf_map(VirtIONet *n, uint8_t cmd,
+                                      struct iovec *iov, unsigned int iov_cnt)
+{
+    struct virtio_net_ctrl_ebpf_map ctrl;
+    size_t s;
+    int fd, err;
+
+    fprintf(stderr, "handle ebpf map cmd -> %d!\n", cmd);
+
+    s = iov_to_buf(iov, iov_cnt, 0, &ctrl, sizeof(ctrl));
+    if (s != sizeof(ctrl)) {
+        fprintf(stderr, "too short!\n");
+        goto err;
+    }
+
+    /* FIXME: assume cmd type */
+
+    fprintf(stderr, "map fd %d\n", ctrl.map_fd);
+
+    switch (ctrl.cmd) {
+    case VIRTIO_NET_BPF_CMD_CREATE_MAP:
+        fprintf(stderr, "map create!\n");
+        fd = bpf_create_map(ctrl.map_type, ctrl.key_size,
+                            ctrl.value_size, ctrl.max_entries,
+                            ctrl.map_flags);
+        if (fd == -1) {
+            fprintf(stderr, "fail to create map!\n");
+            goto err;
+        }
+        ctrl.map_fd = fd;
+        fprintf(stderr, "created map fd %d\n", fd);
+        break;
+    case VIRTIO_NET_BPF_CMD_FREE_MAP:
+        fprintf(stderr, "map close %" PRIx64"\n", ctrl.key);
+        close(ctrl.key);
+        break;
+    case VIRTIO_NET_BPF_CMD_LOOKUP_ELEM:
+        fprintf(stderr, "lookup elem key %" PRIx64"!\n", ctrl.key);
+        err = bpf_map_lookup_elem(ctrl.map_fd, &ctrl.key, &ctrl.value);
+        if (err) {
+            fprintf(stderr, "fail to lookup elem!\n");
+            goto err;
+        }
+        fprintf(stderr, "lookup elem finish value %" PRIx64"!\n", ctrl.value);
+        break;
+    case VIRTIO_NET_BPF_CMD_GET_NEXT:
+        fprintf(stderr, "get next key!\n");
+        err = bpf_map_get_next_key(ctrl.map_fd, &ctrl.key, &ctrl.value);
+        if (err) {
+            fprintf(stderr, "fail to get next key!\n");
+            goto err;
+        }
+        fprintf(stderr, "key %"PRIx64" value %"PRIx64"\n",
+                ctrl.key, ctrl.value);
+        break;
+    default:
+        fprintf(stderr, "not implemented %d!\n", ctrl.cmd);
+        goto err;
+    }
+
+    s = iov_from_buf(iov, iov_cnt, 0, &ctrl, sizeof(ctrl));
+    if (s != sizeof(ctrl)) {
+        fprintf(stderr, "fail to write back!\n");
+        goto err;
+    }
+    return VIRTIO_NET_OK;
+
+err:
+    return VIRTIO_NET_ERR;
+}
+
 static int virtio_net_handle_ebpf(VirtIONet *n, uint8_t cmd,
                                   struct iovec *iov, unsigned int iov_cnt)
 {
     char prog[65536];
     size_t s;
     int err;
-    int i;
 
     if (cmd == VIRTIO_NET_CTRL_EBPF_SET_OFFLOAD_PROG) {
-        struct bpf_insn *insn = (struct bpf_insn *)prog;
         s = iov_to_buf(iov, iov_cnt, 0, &prog, sizeof(prog));
         fprintf(stderr, "sizeof %d\n", (int)sizeof(struct bpf_insn));
         fprintf(stderr, "load ebpf prog %d insn len %d\n", (int)s,
                 (int)(s / sizeof(struct bpf_insn)));
 
-        for (i = 0; i < s / sizeof(struct bpf_insn); i++) {
-            fprintf(stderr, "insn %d code %x\n", i, insn[i].code);
-        }
-
         err = peer_attach_ebpf(n, s, prog);
         if (err)
             return VIRTIO_NET_ERR;
 
+        fprintf(stderr, "load ebpf prog succeed!\n");
         return VIRTIO_NET_OK;
     }
 
@@ -1080,8 +1234,6 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
     struct iovec *iov, *iov2;
     unsigned int iov_cnt;
 
-    fprintf(stderr, "ctrl!\n");
-
     for (;;) {
         elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
         if (!elem) {
@@ -1114,9 +1266,11 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         } else if (ctrl.class == VIRTIO_NET_CTRL_GUEST_OFFLOADS) {
             status = virtio_net_handle_offloads(n, ctrl.cmd, iov, iov_cnt);
         } else if (ctrl.class == VIRTIO_NET_CTRL_EBPF) {
-            fprintf(stderr, "ebpf!\n");
-            status = virtio_net_handle_ebpf(n, ctrl.cmd, iov, iov_cnt);;
+            status = virtio_net_handle_ebpf(n, ctrl.cmd, iov, iov_cnt);
+        } else if (ctrl.class == VIRTIO_NET_CTRL_EBPF_MAP) {
+            status = virtio_net_handle_ebpf_map(n, ctrl.cmd, iov, iov_cnt);
         }
+
 
         s = iov_from_buf(elem->in_sg, elem->in_num, 0, &status, sizeof(status));
         assert(s == sizeof(status));
@@ -1126,7 +1280,6 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         g_free(iov2);
         g_free(elem);
     }
-    fprintf(stderr, "done!\n");
 }
 
 /* RX */
