@@ -20,6 +20,7 @@
 #include "exec/memop.h"
 #include "standard-headers/linux/virtio_pci.h"
 #include "hw/virtio/virtio.h"
+#include "hw/virtio/virtio-net-pci.h"
 #include "migration/qemu-file-types.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
@@ -1509,6 +1510,45 @@ static void virtio_pci_modern_io_region_unmap(VirtIOPCIProxy *proxy,
     memory_region_del_subregion(&proxy->io_bar,
                                 &region->mr);
 }
+
+/*
+static VirtIOPCIProxy *virtio_device_to_virtio_pci_proxy(VirtIODevice *vdev)
+{
+    VirtIOPCIProxy *proxy = NULL;
+
+    if (vdev->device_id == VIRTIO_ID_NET) {
+        VirtIONetPCI *d = container_of(vdev, VirtIONetPCI, vdev.parent_obj);
+        proxy = &d->parent_obj;
+    }
+
+    return proxy;
+}
+
+// XXX fix this later
+int virtio_pci_set_notify_region(VirtIODevice *vdev, int queue_idx,
+                                 MemoryRegion *mr, bool assign);
+
+int virtio_pci_set_notify_region(VirtIODevice *vdev, int queue_idx,
+                                 MemoryRegion *mr, bool assign)
+{
+    VirtIOPCIProxy *proxy = virtio_device_to_virtio_pci_proxy(vdev);
+    int offset;
+
+    if (queue_idx >= VIRTIO_QUEUE_MAX || !virtio_pci_modern(proxy) ||
+        virtio_pci_queue_mem_mult(proxy) != memory_region_size(mr)) {
+        return -1;
+    }
+
+    if (assign) {
+        offset = virtio_pci_queue_mem_mult(proxy) * queue_idx;
+        memory_region_add_subregion_overlap(&proxy->notify.mr, offset, mr, 1);
+    } else {
+        memory_region_del_subregion(&proxy->notify.mr, mr);
+    }
+
+    return 0;
+}
+*/
 
 static void virtio_pci_pre_plugged(DeviceState *d, Error **errp)
 {

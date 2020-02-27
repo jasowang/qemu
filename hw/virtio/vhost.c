@@ -402,7 +402,8 @@ static bool vhost_section(struct vhost_dev *dev, MemoryRegionSection *section)
     bool log_dirty = memory_region_get_dirty_log_mask(section->mr) &
                      ~(1 << DIRTY_MEMORY_MIGRATION);
     result = memory_region_is_ram(section->mr) &&
-        !memory_region_is_rom(section->mr);
+        !memory_region_is_rom(section->mr) &&
+        !memory_region_is_ram_device(section->mr);
 
     /* Vhost doesn't handle any block which is doing dirty-tracking other
      * than migration; this typically fires on VGA areas.
@@ -740,9 +741,9 @@ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
 {
     struct vhost_vring_addr addr = {
         .index = idx,
-        .desc_user_addr = (uint64_t)(unsigned long)vq->desc,
-        .avail_user_addr = (uint64_t)(unsigned long)vq->avail,
-        .used_user_addr = (uint64_t)(unsigned long)vq->used,
+        .desc_user_addr = (uint64_t)(unsigned long)vq->desc_phys,
+        .avail_user_addr = (uint64_t)(unsigned long)vq->avail_phys,
+        .used_user_addr = (uint64_t)(unsigned long)vq->used_phys,
         .log_guest_addr = vq->used_phys,
         .flags = enable_log ? (1 << VHOST_VRING_F_LOG) : 0,
     };
@@ -1062,6 +1063,14 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         if (r) {
             goto fail_vector;
         }
+    } else {
+        file.fd = event_notifier_get_fd(virtio_queue_get_guest_notifier(vvq));
+        r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
+        if (r) {
+            VHOST_OPS_DEBUG("vhost_set_vring_call failed");
+            r = -errno;
+            goto fail_vector;
+        }
     }
 
     return 0;
@@ -1165,29 +1174,14 @@ static int vhost_virtqueue_set_busyloop_timeout(struct vhost_dev *dev,
 static int vhost_virtqueue_init(struct vhost_dev *dev,
                                 struct vhost_virtqueue *vq, int n)
 {
-    int vhost_vq_index = dev->vhost_ops->vhost_get_vq_index(dev, n);
-    struct vhost_vring_file file = {
-        .index = vhost_vq_index,
-    };
     int r = event_notifier_init(&vq->masked_notifier, 0);
     if (r < 0) {
         return r;
     }
 
-    file.fd = event_notifier_get_fd(&vq->masked_notifier);
-    r = dev->vhost_ops->vhost_set_vring_call(dev, &file);
-    if (r) {
-        VHOST_OPS_DEBUG("vhost_set_vring_call failed");
-        r = -errno;
-        goto fail_call;
-    }
-
     vq->dev = dev;
 
     return 0;
-fail_call:
-    event_notifier_cleanup(&vq->masked_notifier);
-    return r;
 }
 
 static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
@@ -1705,6 +1699,21 @@ int vhost_net_set_backend(struct vhost_dev *hdev,
 {
     if (hdev->vhost_ops->vhost_net_set_backend) {
         return hdev->vhost_ops->vhost_net_set_backend(hdev, file);
+    }
+
+    return -1;
+}
+
+/*
+ * XXX:
+ * state:
+ * 0 - stop
+ * 1 - start
+ */
+int vhost_set_state(struct vhost_dev *hdev, int state)
+{
+    if (hdev->vhost_ops->vhost_set_state) {
+        return hdev->vhost_ops->vhost_set_state(hdev, state);
     }
 
     return -1;
