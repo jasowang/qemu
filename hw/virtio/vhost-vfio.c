@@ -18,6 +18,9 @@
 #include "hw/virtio/virtio-net.h"
 #include "hw/virtio/vhost-vfio.h"
 #include "qemu/main-loop.h"
+
+extern AddressSpace address_space_memory;
+
 // TODO: move to linux/vhost.h
 struct vhost_vfio_op {
     __u64 request;
@@ -56,6 +59,11 @@ struct vhost_mdev_config {
 #define VHOST_MDEV_SET_VRING_ENABLE	_IOW(VHOST_VIRTIO, 0x75, struct vhost_vring_state)
 /* Get the max ring size. */
 #define VHOST_MDEV_GET_VRING_NUM	_IOR(VHOST_VIRTIO, 0x76, __u16)
+
+struct vhost_vfio {
+    VhostVFIO *vfio;
+    MemoryListener listener;
+};
 
 // -- end here
 
@@ -103,9 +111,193 @@ again:
 }
 // -----------------
 
+static bool vhost_vdpa_listener_skipped_section(MemoryRegionSection *section)
+{
+    return (!memory_region_is_ram(section->mr) &&
+            !memory_region_is_iommu(section->mr)) ||
+           /*
+            * Sizing an enabled 64-bit BAR can cause spurious mappings to
+            * addresses in the upper part of the 64-bit address space.  These
+            * are never accessed by the CPU and beyond the address width of
+            * some IOMMU hardware.  TODO: VFIO should tell us the IOMMU width.
+            */
+           section->offset_within_address_space & (1ULL << 63);
+}
 
-struct vhost_vfio {
-    VhostVFIO *vfio;
+static int vhost_vdpa_dma_map(struct vhost_vfio *v, hwaddr iova, hwaddr size,
+                              void *vaddr, bool readonly)
+{
+    VhostVFIO *vfio = v->vfio;
+    struct vhost_msg_v2 msg;
+    int fd = vfio->device_fd;
+    int ret = 0;
+
+    msg.type = VHOST_IOTLB_MSG_V2;
+    msg.iotlb.iova = iova;
+    msg.iotlb.size = size;
+    msg.iotlb.uaddr = (uint64_t)vaddr;
+    msg.iotlb.perm = readonly ? VHOST_ACCESS_RO : VHOST_ACCESS_RW;
+    msg.iotlb.type = VHOST_IOTLB_UPDATE;
+
+    if (write(fd, &msg, sizeof(msg)) != sizeof(msg)) {
+        fprintf(stderr, "failed to write, fd=%d, errno=%d (%s)\n",
+                fd, errno, strerror(errno));
+        exit(1);
+    }
+
+    return ret;
+}
+
+static int vhost_vdpa_dma_unmap(struct vhost_vfio *v, hwaddr iova,
+                                hwaddr size)
+{
+    VhostVFIO *vfio = v->vfio;
+    struct vhost_msg_v2 msg;
+    int fd = vfio->device_fd;
+    int ret = 0;
+
+    msg.type = VHOST_IOTLB_MSG_V2;
+    msg.iotlb.iova = iova;
+    msg.iotlb.size = size;
+    msg.iotlb.type = VHOST_IOTLB_INVALIDATE;
+
+    if (write(fd, &msg, sizeof(msg)) != sizeof(msg)) {
+        printf("failed to write, fd=%d, errno=%d (%s)\n",
+               fd, errno, strerror(errno));
+        exit(1);
+    }
+
+    return ret;
+}
+
+static void vhost_vdpa_listener_region_add(MemoryListener *listener,
+                                           MemoryRegionSection *section)
+{
+    struct vhost_vfio *v = container_of(listener, struct vhost_vfio, listener);
+    hwaddr iova;
+    Int128 llend, llsize;
+    void *vaddr;
+    int ret;
+
+    if (vhost_vdpa_listener_skipped_section(section)) {
+#if 0
+        fprintf(stderr, "skip start %"PRIx64" end %"PRIx64"\n",
+                section->offset_within_address_space,
+                section->offset_within_address_space +
+                int128_get64(int128_sub(section->size,
+                int128_one())));
+#endif
+        return;
+    }
+
+    if (unlikely((section->offset_within_address_space & ~TARGET_PAGE_MASK) !=
+                 (section->offset_within_region & ~TARGET_PAGE_MASK))) {
+        error_report("%s received unaligned region", __func__);
+        return;
+    }
+
+    iova = TARGET_PAGE_ALIGN(section->offset_within_address_space);
+    llend = int128_make64(section->offset_within_address_space);
+    llend = int128_add(llend, section->size);
+    llend = int128_and(llend, int128_exts64(TARGET_PAGE_MASK));
+
+    if (int128_ge(int128_make64(iova), llend)) {
+        return;
+    }
+
+    memory_region_ref(section->mr);
+
+    /* Here we assume that memory_region_is_ram(section->mr)==true */
+
+    vaddr = memory_region_get_ram_ptr(section->mr) +
+            section->offset_within_region +
+            (iova - section->offset_within_address_space);
+
+    llsize = int128_sub(llend, int128_make64(iova));
+    fprintf(stderr, "region add iova %"PRIx64" size %"PRIx64" vaddr %"PRIx64"\n",
+            iova, int128_get64(llsize), (hwaddr)vaddr);
+
+    ret = vhost_vdpa_dma_map(v, iova, int128_get64(llsize),
+                             vaddr, section->readonly);
+    if (ret) {
+        fprintf(stderr, "vhost vdpa map fail!\n");
+        if (memory_region_is_ram_device(section->mr)) {
+            /* Allow unexpected mappings not to be fatal for RAM devices */
+            fprintf(stderr, "map ram fail!\n");
+            exit(1);
+            return;
+        }
+        goto fail;
+    }
+
+    return;
+
+fail:
+    if (memory_region_is_ram_device(section->mr)) {
+        error_report("failed to vfio_dma_map. pci p2p may not work");
+        return;
+    }
+    /*
+     * On the initfn path, store the first error in the container so we
+     * can gracefully fail.  Runtime, there's not much we can do other
+     * than throw a hardware error.
+     */
+    fprintf(stderr, "vhost-vdpa: DMA mapping failed, unable to continue");
+    exit(1);
+}
+
+static void vhost_vdpa_listener_region_del(MemoryListener *listener,
+                                           MemoryRegionSection *section)
+{
+    struct vhost_vfio *v = container_of(listener, struct vhost_vfio, listener);
+    hwaddr iova;
+    Int128 llend, llsize;
+    int ret;
+    bool try_unmap = true;
+
+    if (vhost_vdpa_listener_skipped_section(section)) {
+#if 0
+        fprintf(stderr, "skip start %"PRIx64" end %"PRIx64"\n",
+                section->offset_within_address_space,
+                section->offset_within_address_space +
+                int128_get64(int128_sub(section->size,
+                int128_one())));
+#endif
+        return;
+    }
+
+    if (unlikely((section->offset_within_address_space & ~TARGET_PAGE_MASK) !=
+                 (section->offset_within_region & ~TARGET_PAGE_MASK))) {
+        error_report("%s received unaligned region", __func__);
+        return;
+    }
+
+    iova = TARGET_PAGE_ALIGN(section->offset_within_address_space);
+    llend = int128_make64(section->offset_within_address_space);
+    llend = int128_add(llend, section->size);
+    llend = int128_and(llend, int128_exts64(TARGET_PAGE_MASK));
+
+    if (int128_ge(int128_make64(iova), llend)) {
+        return;
+    }
+
+    llsize = int128_sub(llend, int128_make64(iova));
+
+    if (try_unmap) {
+        fprintf(stderr, "region del iova %"PRIx64" size %"PRIx64"\n",
+                iova, int128_get64(llsize));
+        ret = vhost_vdpa_dma_unmap(v, iova, int128_get64(llsize));
+        if (ret) {
+            fprintf(stderr, "vhost_vdpa dma unmap error!\n");
+        }
+    }
+
+    memory_region_unref(section->mr);
+}
+
+static const MemoryListener vhost_vdpa_memory_listener = {
+    .region_add = vhost_vdpa_listener_region_add,
+    .region_del = vhost_vdpa_listener_region_del,
 };
 
 struct notify_arg {
@@ -135,6 +327,9 @@ static int vhost_vfio_init(struct vhost_dev *dev, void *opaque)
     v->vfio = opaque;
 
     dev->opaque = v;
+
+    v->listener = vhost_vdpa_memory_listener;
+    memory_listener_register(&v->listener, &address_space_memory);
 
     vhost_vfio_kvm_add_vfio_group(v->vfio);
 
@@ -166,92 +361,15 @@ static int vhost_vfio_set_log_base(struct vhost_dev *dev, uint64_t base,
     return 0;
 }
 
-static int vhost_vfio_iommu_dma_map(int fd, struct vhost_memory *mem)
-{
-    int i;
-    int ret = 0;
-
-    printf("[%s] called\n", __func__);
-
-    for (i = 0; i < mem->nregions; i++) {
-        struct vhost_msg_v2 msg;
-
-        msg.type = VHOST_IOTLB_MSG_V2;
-        msg.iotlb.iova = mem->regions[i].guest_phys_addr;
-        msg.iotlb.size = mem->regions[i].memory_size;
-        msg.iotlb.uaddr = mem->regions[i].userspace_addr;
-        msg.iotlb.perm = VHOST_ACCESS_RW;
-        msg.iotlb.type = VHOST_IOTLB_UPDATE;
-
-        if (write(fd, &msg, sizeof(msg)) != sizeof(msg)) {
-            printf("failed to write, fd=%d, errno=%d (%s)\n", fd, errno, strerror(errno));
-            exit(1);
-        }
-    }
-
-    return ret;
-}
-
-#if 0
-static int vhost_vfio_iommu_dma_unmap(int vfio_container_fd,
-                    uint64_t iommu_pgsizes,
-                            struct vhost_memory *mem)
-{
-    int i;
-    int ret = 0;
-
-    for (i = 0; i < mem->nregions; i++) {
-        uint64_t iova = mem->regions[i].guest_phys_addr;
-        struct vfio_iommu_type1_dma_unmap unmap = {
-            .argsz = sizeof(unmap)
-        };
-
-        unmap.size = mem->regions[i].memory_size;
-        unmap.iova = iova;
-        unmap.flags = 0;
-
-        ret = ioctl(vfio_container_fd,
-                VFIO_IOMMU_UNMAP_DMA,
-                &unmap);
-        if (ret) {
-            perror("VFIO_IOMMU_MAP_UNDMA: ioctl failed\n");
-            return errno;
-        }
-    }
-
-    return ret;
-}
-#endif
-
 static int vhost_vfio_set_mem_table(struct vhost_dev *dev,
                                     struct vhost_memory *mem)
 {
-    struct vhost_vfio *v = dev->opaque;
-    VhostVFIO *vfio = v->vfio;
-    int ret;
+    fprintf(stderr, "dummy mem table!\n");
 
     if (mem->padding)
         return -1;
 
-#if 0
-    ret = vhost_kernel_call(dev, VHOST_SET_MEM_TABLE, mem);
-    if (ret) {
-        printf("%s: vhost_vfio_write failed\n", __func__);
-        return ret;
-    }
-#endif
-
-#if 1
-#if 0
-    ret = vhost_vfio_iommu_dma_unmap(vfio->container_fd, vfio->iommu_pgsizes, mem);
-    if (ret)
-        return ret;
-#endif
-
-    ret = vhost_vfio_iommu_dma_map(vfio->device_fd, mem);
-#endif
-
-    return ret;
+    return 0;
 }
 
 static int vhost_vfio_set_vring_addr(struct vhost_dev *dev,
@@ -386,6 +504,12 @@ static int vhost_vfio_migration_done(struct vhost_dev *dev, char* mac_addr)
     return -1;
 }
 
+static void vhost_vdpa_set_iotlb_callback(struct vhost_dev *dev,
+                                          int enabled)
+{
+    /* dummy */
+}
+
 const VhostOps vfio_ops = {
         .backend_type = VHOST_BACKEND_TYPE_VFIO,
         .vhost_backend_init = vhost_vfio_init,
@@ -410,7 +534,7 @@ const VhostOps vfio_ops = {
         .vhost_migration_done = vhost_vfio_migration_done,
         .vhost_backend_can_merge = NULL,
         .vhost_net_set_mtu = NULL,
-        .vhost_set_iotlb_callback = NULL,
+        .vhost_set_iotlb_callback = vhost_vdpa_set_iotlb_callback,
         .vhost_send_device_iotlb_msg = NULL,
         .vhost_set_state = vhost_vfio_set_state,
 };
