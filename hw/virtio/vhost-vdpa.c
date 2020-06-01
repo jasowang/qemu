@@ -320,7 +320,7 @@ static int vhost_vdpa_set_config(struct vhost_dev *dev, const uint8_t *data,
 {
     struct vhost_vdpa_config config;
     int ret;
-    if ((size > VHOST_VDPA_MAX_CONFIG_SIZE) || (data == NULL)) {
+    if ((size > 64) || (data == NULL)) {
         return -1;
     }
     memset(&config, 0, sizeof(struct vhost_vdpa_config));
