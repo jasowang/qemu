@@ -230,7 +230,6 @@ static int vhost_vdpa_init(struct vhost_dev *dev, void *opaque)
 
     v->listener = vhost_vdpa_memory_listener;
     v->msg_type = VHOST_IOTLB_MSG_V2;
-    memory_listener_register(&v->listener, &address_space_memory);
 
     vhost_vdpa_add_status(dev, VIRTIO_CONFIG_S_ACKNOWLEDGE |
                                VIRTIO_CONFIG_S_DRIVER);
@@ -351,9 +350,12 @@ static int vhost_vdpa_get_config(struct vhost_dev *dev, uint8_t *config,
 
 static int vhost_vdpa_set_state(struct vhost_dev *dev, bool started)
 {
+    struct vhost_vdpa *v = dev->opaque;
+
     if (started) {
         uint8_t status = 0;
 
+        memory_listener_register(&v->listener, &address_space_memory);
         vhost_vdpa_add_status(dev, VIRTIO_CONFIG_S_DRIVER_OK);
         vhost_vdpa_call(dev, VHOST_VDPA_GET_STATUS, &status);
 
@@ -362,6 +364,8 @@ static int vhost_vdpa_set_state(struct vhost_dev *dev, bool started)
         vhost_vdpa_reset_device(dev);
         vhost_vdpa_add_status(dev, VIRTIO_CONFIG_S_ACKNOWLEDGE |
                                    VIRTIO_CONFIG_S_DRIVER);
+        memory_listener_unregister(&v->listener);
+
         return 0;
     }
 }
