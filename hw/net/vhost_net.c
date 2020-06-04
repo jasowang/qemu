@@ -370,15 +370,15 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
 
     for (i = 0; i < total_queues; i++) {
 
-        if (virtio_queue_enabled(dev, i)) {
-            vhost_set_vring_ready(peer);
-        }
-
         peer = qemu_get_peer(ncs, i);
         r = vhost_net_start_one(get_vhost_net(peer), dev);
 
         if (r < 0) {
             goto err_start;
+        }
+
+        if (virtio_queue_enabled(dev, i)) {
+            vhost_set_vring_ready(peer);
         }
 
         if (peer->vring_enable) {
