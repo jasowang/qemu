@@ -164,8 +164,6 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
     VRingMemoryRegionCaches *new = NULL;
     hwaddr addr, size;
     int64_t len;
-    bool packed;
-
 
     addr = vq->vring.desc;
     if (!addr) {
@@ -173,10 +171,8 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
     }
     new = g_new0(VRingMemoryRegionCaches, 1);
     size = virtio_queue_get_desc_size(vdev, n);
-    packed = virtio_vdev_has_feature(vq->vdev, VIRTIO_F_RING_PACKED) ?
-                                   true : false;
     len = address_space_cache_init(&new->desc, vdev->dma_as,
-                                   addr, size, packed);
+                                   addr, size, true);
     if (len < size) {
         virtio_error(vdev, "Cannot map desc");
         goto err_desc;
@@ -192,7 +188,7 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
 
     size = virtio_queue_get_avail_size(vdev, n);
     len = address_space_cache_init(&new->avail, vdev->dma_as,
-                                   vq->vring.avail, size, false);
+                                   vq->vring.avail, size, true);
     if (len < size) {
         virtio_error(vdev, "Cannot map avail");
         goto err_avail;
@@ -231,9 +227,29 @@ void virtio_queue_update_rings(VirtIODevice *vdev, int n)
     virtio_init_region_cache(vdev, n);
 }
 
+static void vring_split_desc_write(VirtIODevice *vdev, VRingDesc *d,
+                                   MemoryRegionCache *cache, int i)
+{
+    VRingDesc desc = *d;
+
+    desc.addr = UINT64_MAX;
+    desc.len = UINT32_MAX;
+
+    virtio_tswap64s(vdev, &desc.addr);
+    virtio_tswap32s(vdev, &desc.len);
+    virtio_tswap16s(vdev, &desc.flags);
+    virtio_tswap16s(vdev, &desc.next);
+
+    address_space_write_cached(cache, i * sizeof(VRingDesc),
+                               &desc, sizeof(VRingDesc));
+    address_space_cache_invalidate(cache, i + sizeof(VRingDesc),
+                                   sizeof(VRingDesc));
+}
+
 /* Called within rcu_read_lock().  */
 static void vring_split_desc_read(VirtIODevice *vdev, VRingDesc *desc,
-                                  MemoryRegionCache *cache, int i)
+                                  MemoryRegionCache *cache, int i,
+                                  bool rewrite)
 {
     address_space_read_cached(cache, i * sizeof(VRingDesc),
                               desc, sizeof(VRingDesc));
@@ -241,6 +257,9 @@ static void vring_split_desc_read(VirtIODevice *vdev, VRingDesc *desc,
     virtio_tswap32s(vdev, &desc->len);
     virtio_tswap16s(vdev, &desc->flags);
     virtio_tswap16s(vdev, &desc->next);
+    if (rewrite) {
+        vring_split_desc_write(vdev, desc, cache, i);
+    }
 }
 
 static void vring_packed_event_read(VirtIODevice *vdev,
@@ -982,7 +1001,7 @@ static int virtqueue_split_read_next_desc(VirtIODevice *vdev, VRingDesc *desc,
         return VIRTQUEUE_READ_DESC_ERROR;
     }
 
-    vring_split_desc_read(vdev, desc, desc_cache, *next);
+    vring_split_desc_read(vdev, desc, desc_cache, *next, false);
     return VIRTQUEUE_READ_DESC_MORE;
 }
 
@@ -1021,7 +1040,7 @@ static void virtqueue_split_get_avail_bytes(VirtQueue *vq,
             goto err;
         }
 
-        vring_split_desc_read(vdev, &desc, desc_cache, i);
+        vring_split_desc_read(vdev, &desc, desc_cache, i, false);
 
         if (desc.flags & VRING_DESC_F_INDIRECT) {
             if (!desc.len || (desc.len % sizeof(VRingDesc))) {
@@ -1038,7 +1057,7 @@ static void virtqueue_split_get_avail_bytes(VirtQueue *vq,
             /* loop over the indirect descriptor table */
             len = address_space_cache_init(&indirect_desc_cache,
                                            vdev->dma_as,
-                                           desc.addr, desc.len, false);
+                                           desc.addr, desc.len, true);
             desc_cache = &indirect_desc_cache;
             if (len < desc.len) {
                 virtio_error(vdev, "Cannot map indirect buffer");
@@ -1047,7 +1066,7 @@ static void virtqueue_split_get_avail_bytes(VirtQueue *vq,
 
             max = desc.len / sizeof(VRingDesc);
             num_bufs = i = 0;
-            vring_split_desc_read(vdev, &desc, desc_cache, i);
+            vring_split_desc_read(vdev, &desc, desc_cache, i, false);
         }
 
         do {
@@ -1179,7 +1198,7 @@ static void virtqueue_packed_get_avail_bytes(VirtQueue *vq,
             /* loop over the indirect descriptor table */
             len = address_space_cache_init(&indirect_desc_cache,
                                            vdev->dma_as,
-                                           desc.addr, desc.len, false);
+                                           desc.addr, desc.len, true);
             desc_cache = &indirect_desc_cache;
             if (len < desc.len) {
                 virtio_error(vdev, "Cannot map indirect buffer");
@@ -1466,7 +1485,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
     }
 
     desc_cache = &caches->desc;
-    vring_split_desc_read(vdev, &desc, desc_cache, i);
+    vring_split_desc_read(vdev, &desc, desc_cache, i, true);
     if (desc.flags & VRING_DESC_F_INDIRECT) {
         if (!desc.len || (desc.len % sizeof(VRingDesc))) {
             virtio_error(vdev, "Invalid size for indirect buffer table");
@@ -1475,7 +1494,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
 
         /* loop over the indirect descriptor table */
         len = address_space_cache_init(&indirect_desc_cache, vdev->dma_as,
-                                       desc.addr, desc.len, false);
+                                       desc.addr, desc.len, true);
         desc_cache = &indirect_desc_cache;
         if (len < desc.len) {
             virtio_error(vdev, "Cannot map indirect buffer");
@@ -1484,7 +1503,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
 
         max = desc.len / sizeof(VRingDesc);
         i = 0;
-        vring_split_desc_read(vdev, &desc, desc_cache, i);
+        vring_split_desc_read(vdev, &desc, desc_cache, i, true);
     }
 
     /* Collect all the descriptors */
@@ -1603,7 +1622,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
 
         /* loop over the indirect descriptor table */
         len = address_space_cache_init(&indirect_desc_cache, vdev->dma_as,
-                                       desc.addr, desc.len, false);
+                                       desc.addr, desc.len, true);
         desc_cache = &indirect_desc_cache;
         if (len < desc.len) {
             virtio_error(vdev, "Cannot map indirect buffer");
