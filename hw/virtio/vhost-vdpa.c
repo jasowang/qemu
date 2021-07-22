@@ -581,9 +581,8 @@ static int vhost_vdpa_dev_start(struct vhost_dev *dev, bool started)
         vhost_vdpa_host_notifiers_uninit(dev, dev->nvqs);
     }
 
-    if (vhost_vdpa_one_time_request(dev)) {
+    if (!v->last)
         return 0;
-    }
 
     if (started) {
         uint8_t status = 0;
