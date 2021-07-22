@@ -262,6 +262,7 @@ int net_init_vhost_vdpa(const Netdev *netdev, const char *name,
     int vdpa_device_fd;
     NetClientState **ncs, *nc;
     int qps, i, has_cvq = 0;
+    VhostVDPAState *s;
 
     assert(netdev->type == NET_CLIENT_DRIVER_VHOST_VDPA);
     opts = &netdev->u.vhost_vdpa;
@@ -296,6 +297,13 @@ int net_init_vhost_vdpa(const Netdev *netdev, const char *name,
                                  vdpa_device_fd, i, 1, false);
         if (!nc)
             goto err;
+
+        s = DO_UPCAST(VhostVDPAState, nc, nc);
+        s->vhost_vdpa.last = true;
+    } else {
+        nc = ncs[qps - 1];
+        s = DO_UPCAST(VhostVDPAState, nc, nc);
+        s->vhost_vdpa.last = true;
     }
 
     g_free(ncs);

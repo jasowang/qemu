@@ -581,8 +581,11 @@ static int vhost_vdpa_dev_start(struct vhost_dev *dev, bool started)
         vhost_vdpa_host_notifiers_uninit(dev, dev->nvqs);
     }
 
-    if (vhost_vdpa_one_time_request(dev)) {
+    if (!v->last) {
+        fprintf(stderr, "idx %d not last!\n", v->index);
         return 0;
+    } else {
+        fprintf(stderr, "idx %d last!\n", v->index);
     }
 
     if (started) {
