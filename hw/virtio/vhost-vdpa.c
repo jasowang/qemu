@@ -453,10 +453,6 @@ static int vhost_vdpa_set_backend_cap(struct vhost_dev *dev)
         0x1ULL << VHOST_BACKEND_F_IOTLB_BATCH;
     int r;
 
-    if (vhost_vdpa_one_time_request(dev)) {
-        return 0;
-    }
-
     if (vhost_vdpa_call(dev, VHOST_GET_BACKEND_FEATURES, &features)) {
         return 0;
     }
