@@ -175,6 +175,7 @@ static NetClientState *net_vhost_vdpa_init(NetClientState *peer,
                                            bool is_datapath)
 {
     NetClientState *nc = NULL;
+    struct vhost_dev *dev;
     VhostVDPAState *s;
     int ret = 0;
     assert(name);
@@ -195,6 +196,13 @@ static NetClientState *net_vhost_vdpa_init(NetClientState *peer,
         qemu_del_net_client(nc);
         return NULL;
     }
+
+    dev = s->vhost_vdpa.dev;
+    if (dev->vhost_ops->vhost_set_backend_cap(dev)) {
+        qemu_del_net_client(nc);
+        return NULL;
+    }
+
     return nc;
 }
 
