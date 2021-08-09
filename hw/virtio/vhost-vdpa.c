@@ -100,6 +100,8 @@ static void vhost_vdpa_listener_begin(MemoryListener *listener)
         return;
     }
 
+    fprintf(stderr, "batch begin!\n");
+
     msg.type = v->msg_type;
     msg.iotlb.type = VHOST_IOTLB_BATCH_BEGIN;
 
@@ -119,6 +121,8 @@ static void vhost_vdpa_listener_commit(MemoryListener *listener)
     if (!(dev->backend_cap & (0x1ULL << VHOST_BACKEND_F_IOTLB_BATCH))) {
         return;
     }
+
+    fprintf(stderr, "batch end!\n");
 
     msg.type = v->msg_type;
     msg.iotlb.type = VHOST_IOTLB_BATCH_END;
