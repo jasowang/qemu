@@ -271,6 +271,10 @@ int net_init_vhost_vdpa(const Netdev *netdev, const char *name,
     NetClientState **ncs, *nc;
     int qps, i, has_cvq = 0;
     VhostVDPAState *s;
+    struct vhost_msg_v2 msg = {};
+    uint8_t status = 0;
+    uint64_t f = 0x1ULL << VHOST_BACKEND_F_IOTLB_MSG_V2 |
+        0x1ULL << VHOST_BACKEND_F_IOTLB_BATCH;
 
     assert(netdev->type == NET_CLIENT_DRIVER_VHOST_VDPA);
     opts = &netdev->u.vhost_vdpa;
@@ -289,6 +293,39 @@ int net_init_vhost_vdpa(const Netdev *netdev, const char *name,
     if (qps < 0) {
         qemu_close(vdpa_device_fd);
         return qps;
+    }
+
+    if (ioctl(vdpa_device_fd, VHOST_SET_OWNER, NULL)) {
+        error_report("failed to set owner!\n");
+        return -EFAULT;
+    }
+
+    if (ioctl(vdpa_device_fd, VHOST_SET_BACKEND_FEATURES, &f)) {
+        error_report("failed to set backend features\n");
+        return -EFAULT;
+    }
+
+    msg.type = VHOST_IOTLB_MSG_V2;
+    msg.iotlb.type = VHOST_IOTLB_BATCH_BEGIN;
+
+    if (write(vdpa_device_fd, &msg, sizeof(msg)) != sizeof(msg)) {
+        error_report("failed to write BATCH BEGIN, fd=%d, errno=%d (%s)",
+                     vdpa_device_fd, errno, strerror(errno));
+        return -EFAULT;
+    }
+
+    msg.type = VHOST_IOTLB_MSG_V2;
+    msg.iotlb.type = VHOST_IOTLB_BATCH_END;
+
+    if (write(vdpa_device_fd, &msg, sizeof(msg)) != sizeof(msg)) {
+        error_report("failed to write BATCH BEGIN, fd=%d, errno=%d (%s)",
+                     vdpa_device_fd, errno, strerror(errno));
+        return -EFAULT;
+    }
+
+    if (ioctl(vdpa_device_fd, VHOST_VDPA_SET_STATUS, &status)) {
+        error_report("failed to reset vdpa device\n");
+        return -EFAULT;
     }
 
     ncs = g_malloc0(sizeof(*ncs) * qps);

@@ -682,7 +682,9 @@ static int vhost_vdpa_set_owner(struct vhost_dev *dev)
     }
 
     trace_vhost_vdpa_set_owner(dev);
-    return vhost_vdpa_call(dev, VHOST_SET_OWNER, NULL);
+    vhost_vdpa_call(dev, VHOST_SET_OWNER, NULL);
+
+    return 0;
 }
 
 static int vhost_vdpa_vq_get_addr(struct vhost_dev *dev,
