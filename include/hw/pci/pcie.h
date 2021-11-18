@@ -81,6 +81,9 @@ struct PCIExpressDevice {
 
     /* ACS */
     uint16_t acs_cap;
+
+    /* PASID */
+    uint64_t pasid_cap;
 };
 
 #define COMPAT_PROP_PCP "power_controller_present"
@@ -138,6 +141,9 @@ void pcie_acs_reset(PCIDevice *dev);
 void pcie_ari_init(PCIDevice *dev, uint16_t offset, uint16_t nextfn);
 void pcie_dev_ser_num_init(PCIDevice *dev, uint16_t offset, uint64_t ser_num);
 void pcie_ats_init(PCIDevice *dev, uint16_t offset, bool aligned);
+void pcie_pasid_init(PCIDevice *dev, uint16_t offset,
+                     unsigned int max_pasid_width,
+                     bool execute, bool privilege);
 
 void pcie_cap_slot_pre_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
                                Error **errp);
