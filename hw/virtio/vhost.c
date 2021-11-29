@@ -1039,6 +1039,7 @@ static int vhost_memory_region_lookup(struct vhost_dev *hdev,
 
 int vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write)
 {
+    VirtIODevice *vdev = dev->vdev;
     IOMMUTLBEntry iotlb;
     uint64_t uaddr, len;
     int ret = -EFAULT;
@@ -1047,7 +1048,10 @@ int vhost_device_iotlb_miss(struct vhost_dev *dev, uint64_t iova, int write)
 
     trace_vhost_iotlb_miss(dev, 1);
 
-    iotlb = address_space_get_iotlb_entry(dev->vdev->dma_as,
+    /* We use RX address space here, this will be replaced as vhost
+     * doens't support multiple address space now.
+     */
+    iotlb = address_space_get_iotlb_entry(virtio_queue_get_dma_as(vdev->vq),
                                           iova, write,
                                           MEMTXATTRS_UNSPECIFIED);
     if (iotlb.target_as != NULL) {
@@ -1754,7 +1758,8 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     }
 
     if (vhost_dev_has_iommu(hdev)) {
-        memory_listener_register(&hdev->iommu_listener, vdev->dma_as);
+        memory_listener_register(&hdev->iommu_listener,
+                                 virtio_queue_get_dma_as(vdev->vq));
     }
 
     r = hdev->vhost_ops->vhost_set_mem_table(hdev, hdev->mem);
