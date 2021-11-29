@@ -555,6 +555,12 @@ struct VirtQueue
 
     unsigned int inuse;
 
+    /* Per virtqueue DMA address space */
+    AddressSpace *dma_as;
+
+    /* dma_as listener */
+    MemoryListener listener;
+
     uint16_t vector;
     VirtIOHandleOutput handle_output;
     VirtIODevice *vdev;
@@ -653,7 +659,7 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
     size = virtio_queue_get_desc_size(vdev, n);
     packed = virtio_vdev_has_feature(vq->vdev, VIRTIO_F_RING_PACKED) ?
                                    true : false;
-    len = address_space_cache_init(&new->desc, vdev->dma_as,
+    len = address_space_cache_init(&new->desc, vq->dma_as,
                                    addr, size, packed);
     if (len < size) {
         virtio_error(vdev, "Cannot map desc");
@@ -661,7 +667,7 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
     }
 
     size = virtio_queue_get_used_size(vdev, n);
-    len = address_space_cache_init(&new->used, vdev->dma_as,
+    len = address_space_cache_init(&new->used, vq->dma_as,
                                    vq->vring.used, size, true);
     if (len < size) {
         virtio_error(vdev, "Cannot map used");
@@ -669,7 +675,7 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
     }
 
     size = virtio_queue_get_avail_size(vdev, n);
-    len = address_space_cache_init(&new->avail, vdev->dma_as,
+    len = address_space_cache_init(&new->avail, vq->dma_as,
                                    vq->vring.avail, size, false);
     if (len < size) {
         virtio_error(vdev, "Cannot map avail");
@@ -691,6 +697,31 @@ err_desc:
 out_no_cache:
     g_free(new);
     virtio_virtqueue_reset_region_cache(vq);
+}
+
+void virtio_queue_set_dma_as(VirtIODevice *vdev, int n, AddressSpace *dma_as)
+{
+    vdev->vq[n].dma_as = dma_as;
+}
+
+void virtio_queue_switch_dma_as(VirtIODevice *vdev, int n,
+                                AddressSpace *dma_as)
+{
+    VirtQueue *vq = &vdev->vq[n];
+
+    memory_listener_unregister(&vq->listener);
+    vq->dma_as = dma_as;
+    memory_listener_register(&vq->listener, vq->dma_as);
+}
+
+AddressSpace *virtio_queue_get_dma_as(VirtQueue *vq)
+{
+    return vq->dma_as;
+}
+
+VirtIODevice *virtio_queue_get_vdev(VirtQueue *vq)
+{
+    return vq->vdev;
 }
 
 /* virt queue functions */
@@ -1157,7 +1188,7 @@ int virtio_queue_empty(VirtQueue *vq)
 static void virtqueue_unmap_sg(VirtQueue *vq, const VirtQueueElement *elem,
                                unsigned int len)
 {
-    AddressSpace *dma_as = vq->vdev->dma_as;
+    AddressSpace *dma_as = vq->dma_as;
     unsigned int offset;
     int i;
 
@@ -1517,7 +1548,7 @@ static void virtqueue_split_get_avail_bytes(VirtQueue *vq,
 
             /* loop over the indirect descriptor table */
             len = address_space_cache_init(&indirect_desc_cache,
-                                           vdev->dma_as,
+                                           vq->dma_as,
                                            desc.addr, desc.len, false);
             desc_cache = &indirect_desc_cache;
             if (len < desc.len) {
@@ -1654,7 +1685,7 @@ static void virtqueue_packed_get_avail_bytes(VirtQueue *vq,
 
             /* loop over the indirect descriptor table */
             len = address_space_cache_init(&indirect_desc_cache,
-                                           vdev->dma_as,
+                                           vq->dma_as,
                                            desc.addr, desc.len, false);
             desc_cache = &indirect_desc_cache;
             if (len < desc.len) {
@@ -1775,11 +1806,12 @@ int virtqueue_avail_bytes(VirtQueue *vq, unsigned int in_bytes,
     return in_bytes <= in_total && out_bytes <= out_total;
 }
 
-static bool virtqueue_map_desc(VirtIODevice *vdev, unsigned int *p_num_sg,
+static bool virtqueue_map_desc(VirtQueue *vq, unsigned int *p_num_sg,
                                hwaddr *addr, struct iovec *iov,
                                unsigned int max_num_sg, bool is_write,
                                hwaddr pa, size_t sz)
 {
+    VirtIODevice *vdev = vq->vdev;
     bool ok = false;
     unsigned num_sg = *p_num_sg;
     assert(num_sg <= max_num_sg);
@@ -1798,7 +1830,7 @@ static bool virtqueue_map_desc(VirtIODevice *vdev, unsigned int *p_num_sg,
             goto out;
         }
 
-        iov[num_sg].iov_base = dma_memory_map(vdev->dma_as, pa, &len,
+        iov[num_sg].iov_base = dma_memory_map(vq->dma_as, pa, &len,
                                               is_write ?
                                               DMA_DIRECTION_FROM_DEVICE :
                                               DMA_DIRECTION_TO_DEVICE,
@@ -1839,7 +1871,7 @@ static void virtqueue_undo_map_desc(unsigned int out_num, unsigned int in_num,
     }
 }
 
-static void virtqueue_map_iovec(VirtIODevice *vdev, struct iovec *sg,
+static void virtqueue_map_iovec(VirtQueue *vq, struct iovec *sg,
                                 hwaddr *addr, unsigned int num_sg,
                                 bool is_write)
 {
@@ -1848,7 +1880,7 @@ static void virtqueue_map_iovec(VirtIODevice *vdev, struct iovec *sg,
 
     for (i = 0; i < num_sg; i++) {
         len = sg[i].iov_len;
-        sg[i].iov_base = dma_memory_map(vdev->dma_as,
+        sg[i].iov_base = dma_memory_map(vq->dma_as,
                                         addr[i], &len, is_write ?
                                         DMA_DIRECTION_FROM_DEVICE :
                                         DMA_DIRECTION_TO_DEVICE,
@@ -1864,10 +1896,10 @@ static void virtqueue_map_iovec(VirtIODevice *vdev, struct iovec *sg,
     }
 }
 
-void virtqueue_map(VirtIODevice *vdev, VirtQueueElement *elem)
+void virtqueue_map(VirtQueue *vq, VirtQueueElement *elem)
 {
-    virtqueue_map_iovec(vdev, elem->in_sg, elem->in_addr, elem->in_num, true);
-    virtqueue_map_iovec(vdev, elem->out_sg, elem->out_addr, elem->out_num,
+    virtqueue_map_iovec(vq, elem->in_sg, elem->in_addr, elem->in_num, true);
+    virtqueue_map_iovec(vq, elem->out_sg, elem->out_addr, elem->out_num,
                                                                         false);
 }
 
@@ -1956,7 +1988,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
         }
 
         /* loop over the indirect descriptor table */
-        len = address_space_cache_init(&indirect_desc_cache, vdev->dma_as,
+        len = address_space_cache_init(&indirect_desc_cache, vq->dma_as,
                                        desc.addr, desc.len, false);
         desc_cache = &indirect_desc_cache;
         if (len < desc.len) {
@@ -1974,7 +2006,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
         bool map_ok;
 
         if (desc.flags & VRING_DESC_F_WRITE) {
-            map_ok = virtqueue_map_desc(vdev, &in_num, addr + out_num,
+            map_ok = virtqueue_map_desc(vq, &in_num, addr + out_num,
                                         iov + out_num,
                                         VIRTQUEUE_MAX_SIZE - out_num, true,
                                         desc.addr, desc.len);
@@ -1983,7 +2015,7 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
                 virtio_error(vdev, "Incorrect order for descriptors");
                 goto err_undo_map;
             }
-            map_ok = virtqueue_map_desc(vdev, &out_num, addr, iov,
+            map_ok = virtqueue_map_desc(vq, &out_num, addr, iov,
                                         VIRTQUEUE_MAX_SIZE, false,
                                         desc.addr, desc.len);
         }
@@ -2084,7 +2116,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
         }
 
         /* loop over the indirect descriptor table */
-        len = address_space_cache_init(&indirect_desc_cache, vdev->dma_as,
+        len = address_space_cache_init(&indirect_desc_cache, vq->dma_as,
                                        desc.addr, desc.len, false);
         desc_cache = &indirect_desc_cache;
         if (len < desc.len) {
@@ -2102,7 +2134,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
         bool map_ok;
 
         if (desc.flags & VRING_DESC_F_WRITE) {
-            map_ok = virtqueue_map_desc(vdev, &in_num, addr + out_num,
+            map_ok = virtqueue_map_desc(vq, &in_num, addr + out_num,
                                         iov + out_num,
                                         VIRTQUEUE_MAX_SIZE - out_num, true,
                                         desc.addr, desc.len);
@@ -2111,7 +2143,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
                 virtio_error(vdev, "Incorrect order for descriptors");
                 goto err_undo_map;
             }
-            map_ok = virtqueue_map_desc(vdev, &out_num, addr, iov,
+            map_ok = virtqueue_map_desc(vq, &out_num, addr, iov,
                                         VIRTQUEUE_MAX_SIZE, false,
                                         desc.addr, desc.len);
         }
@@ -2297,8 +2329,9 @@ typedef struct VirtQueueElementOld {
     struct iovec out_sg[VIRTQUEUE_MAX_SIZE];
 } VirtQueueElementOld;
 
-void *qemu_get_virtqueue_element(VirtIODevice *vdev, QEMUFile *f, size_t sz)
+void *qemu_get_virtqueue_element(VirtQueue *vq, QEMUFile *f, size_t sz)
 {
+    VirtIODevice *vdev = vq->vdev;
     VirtQueueElement *elem;
     VirtQueueElementOld data;
     int i;
@@ -2340,7 +2373,7 @@ void *qemu_get_virtqueue_element(VirtIODevice *vdev, QEMUFile *f, size_t sz)
         qemu_get_be32s(f, &elem->ndescs);
     }
 
-    virtqueue_map(vdev, elem);
+    virtqueue_map(vq, elem);
     return elem;
 }
 
@@ -4114,15 +4147,12 @@ void G_GNUC_PRINTF(2, 3) virtio_error(VirtIODevice *vdev, const char *fmt, ...)
 
 static void virtio_memory_listener_commit(MemoryListener *listener)
 {
-    VirtIODevice *vdev = container_of(listener, VirtIODevice, listener);
-    int i;
+    VirtQueue *vq = container_of(listener, VirtQueue, listener);
 
-    for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
-        if (vdev->vq[i].vring.num == 0) {
-            break;
-        }
-        virtio_init_region_cache(vdev, i);
-    }
+    if (vq->vring.num == 0)
+        return;
+
+    virtio_init_region_cache(vq->vdev, vq->queue_index);
 }
 
 static void virtio_device_realize(DeviceState *dev, Error **errp)
@@ -4130,6 +4160,7 @@ static void virtio_device_realize(DeviceState *dev, Error **errp)
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(dev);
     Error *err = NULL;
+    int i;
 
     /* Devices should either use vmsd or the load/save methods */
     assert(!vdc->vmsd || !vdc->load);
@@ -4149,9 +4180,12 @@ static void virtio_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    vdev->listener.commit = virtio_memory_listener_commit;
-    vdev->listener.name = "virtio";
-    memory_listener_register(&vdev->listener, vdev->dma_as);
+    for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
+        VirtQueue *vq = &vdev->vq[i];
+        vq->listener.commit = virtio_memory_listener_commit;
+        vq->listener.name = "virtio-queue";
+        memory_listener_register(&vq->listener, vq->dma_as);
+    }
     QTAILQ_INSERT_TAIL(&virtio_list, vdev, next);
 }
 
@@ -4159,8 +4193,11 @@ static void virtio_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(dev);
+    int i;
 
-    memory_listener_unregister(&vdev->listener);
+    for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
+        memory_listener_unregister(&vdev->vq[i].listener);
+    }
     virtio_bus_device_unplugged(vdev);
 
     if (vdc->unrealize != NULL) {
@@ -4886,7 +4923,7 @@ VirtioQueueElement *qmp_x_query_virtio_queue_element(const char *path,
         vring_split_desc_read(vdev, &desc, desc_cache, i);
         if (desc.flags & VRING_DESC_F_INDIRECT) {
             int64_t len;
-            len = address_space_cache_init(&indirect_desc_cache, vdev->dma_as,
+            len = address_space_cache_init(&indirect_desc_cache, vq->dma_as,
                                            desc.addr, desc.len, false);
             desc_cache = &indirect_desc_cache;
             if (len < desc.len) {

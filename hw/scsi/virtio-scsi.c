@@ -84,13 +84,12 @@ static inline SCSIDevice *virtio_scsi_device_get(VirtIOSCSI *s, uint8_t *lun)
 
 static void virtio_scsi_init_req(VirtIOSCSI *s, VirtQueue *vq, VirtIOSCSIReq *req)
 {
-    VirtIODevice *vdev = VIRTIO_DEVICE(s);
     const size_t zero_skip =
         offsetof(VirtIOSCSIReq, resp_iov) + sizeof(req->resp_iov);
 
     req->vq = vq;
     req->dev = s;
-    qemu_sglist_init(&req->qsgl, DEVICE(s), 8, vdev->dma_as);
+    qemu_sglist_init(&req->qsgl, DEVICE(s), 8, virtio_queue_get_dma_as(vq));
     qemu_iovec_init(&req->resp_iov, 1);
     memset((uint8_t *)req + zero_skip, 0, sizeof(*req) - zero_skip);
 }
@@ -241,13 +240,12 @@ static void *virtio_scsi_load_request(QEMUFile *f, SCSIRequest *sreq)
     SCSIBus *bus = sreq->bus;
     VirtIOSCSI *s = container_of(bus, VirtIOSCSI, bus);
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(s);
-    VirtIODevice *vdev = VIRTIO_DEVICE(s);
     VirtIOSCSIReq *req;
     uint32_t n;
 
     qemu_get_be32s(f, &n);
     assert(n < vs->conf.num_queues);
-    req = qemu_get_virtqueue_element(vdev, f,
+    req = qemu_get_virtqueue_element(vs->cmd_vqs[n], f,
                                      sizeof(VirtIOSCSIReq) + vs->cdb_size);
     virtio_scsi_init_req(s, vs->cmd_vqs[n], req);
 

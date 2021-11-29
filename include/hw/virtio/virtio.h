@@ -109,6 +109,7 @@ struct VirtIODevice
     uint32_t generation;
     int nvectors;
     VirtQueue *vq;
+    /* FIXME: remove this will cause assert for virtio-pmem */
     MemoryListener listener;
     uint16_t device_id;
     /* @vm_running: current VM running state via virtio_vmstate_change() */
@@ -125,7 +126,6 @@ struct VirtIODevice
     char *bus_name;
     uint8_t device_endian;
     bool use_guest_notifier_mask;
-    AddressSpace *dma_as;
     QLIST_HEAD(, VirtQueue) *vector_queues;
     QTAILQ_ENTRY(VirtIODevice) next;
 };
@@ -215,10 +215,10 @@ bool virtqueue_rewind(VirtQueue *vq, unsigned int num);
 void virtqueue_fill(VirtQueue *vq, const VirtQueueElement *elem,
                     unsigned int len, unsigned int idx);
 
-void virtqueue_map(VirtIODevice *vdev, VirtQueueElement *elem);
+void virtqueue_map(VirtQueue *vq, VirtQueueElement *elem);
 void *virtqueue_pop(VirtQueue *vq, size_t sz);
 unsigned int virtqueue_drop_all(VirtQueue *vq);
-void *qemu_get_virtqueue_element(VirtIODevice *vdev, QEMUFile *f, size_t sz);
+void *qemu_get_virtqueue_element(VirtQueue *vq, QEMUFile *f, size_t sz);
 void qemu_put_virtqueue_element(VirtIODevice *vdev, QEMUFile *f,
                                 VirtQueueElement *elem);
 int virtqueue_avail_bytes(VirtQueue *vq, unsigned int in_bytes,
@@ -277,6 +277,12 @@ int virtio_queue_get_max_num(VirtIODevice *vdev, int n);
 int virtio_get_num_queues(VirtIODevice *vdev);
 void virtio_queue_set_rings(VirtIODevice *vdev, int n, hwaddr desc,
                             hwaddr avail, hwaddr used);
+void virtio_queue_set_dma_as(VirtIODevice *vdev, int n,
+                             AddressSpace *dma_as);
+void virtio_queue_switch_dma_as(VirtIODevice *vdev, int n,
+                                AddressSpace *dma_as);
+AddressSpace *virtio_queue_get_dma_as(VirtQueue *vq);
+VirtIODevice *virtio_queue_get_vdev(VirtQueue *vq);
 void virtio_queue_update_rings(VirtIODevice *vdev, int n);
 void virtio_queue_set_align(VirtIODevice *vdev, int n, int align);
 void virtio_queue_notify(VirtIODevice *vdev, int n);

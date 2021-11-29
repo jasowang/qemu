@@ -39,54 +39,59 @@ static inline bool virtio_access_is_big_endian(VirtIODevice *vdev)
 #endif
 }
 
-static inline uint16_t virtio_lduw_phys(VirtIODevice *vdev, hwaddr pa)
+static inline bool virtio_queue_access_is_big_endian(VirtQueue *vq)
 {
-    AddressSpace *dma_as = vdev->dma_as;
+  return virtio_access_is_big_endian(virtio_queue_get_vdev(vq));
+}
 
-    if (virtio_access_is_big_endian(vdev)) {
+static inline uint16_t virtio_lduw_phys(VirtQueue *vq, hwaddr pa)
+{
+    AddressSpace *dma_as = virtio_queue_get_dma_as(vq);
+
+    if (virtio_queue_access_is_big_endian(vq)) {
         return lduw_be_phys(dma_as, pa);
     }
     return lduw_le_phys(dma_as, pa);
 }
 
-static inline uint32_t virtio_ldl_phys(VirtIODevice *vdev, hwaddr pa)
+static inline uint32_t virtio_ldl_phys(VirtQueue *vq, hwaddr pa)
 {
-    AddressSpace *dma_as = vdev->dma_as;
+    AddressSpace *dma_as = virtio_queue_get_dma_as(vq);
 
-    if (virtio_access_is_big_endian(vdev)) {
+    if (virtio_queue_access_is_big_endian(vq)) {
         return ldl_be_phys(dma_as, pa);
     }
     return ldl_le_phys(dma_as, pa);
 }
 
-static inline uint64_t virtio_ldq_phys(VirtIODevice *vdev, hwaddr pa)
+static inline uint64_t virtio_ldq_phys(VirtQueue *vq, hwaddr pa)
 {
-    AddressSpace *dma_as = vdev->dma_as;
+    AddressSpace *dma_as = virtio_queue_get_dma_as(vq);
 
-    if (virtio_access_is_big_endian(vdev)) {
+    if (virtio_queue_access_is_big_endian(vq)) {
         return ldq_be_phys(dma_as, pa);
     }
     return ldq_le_phys(dma_as, pa);
 }
 
-static inline void virtio_stw_phys(VirtIODevice *vdev, hwaddr pa,
+static inline void virtio_stw_phys(VirtQueue *vq, hwaddr pa,
                                    uint16_t value)
 {
-    AddressSpace *dma_as = vdev->dma_as;
+    AddressSpace *dma_as = virtio_queue_get_dma_as(vq);
 
-    if (virtio_access_is_big_endian(vdev)) {
+    if (virtio_queue_access_is_big_endian(vq)) {
         stw_be_phys(dma_as, pa, value);
     } else {
         stw_le_phys(dma_as, pa, value);
     }
 }
 
-static inline void virtio_stl_phys(VirtIODevice *vdev, hwaddr pa,
+static inline void virtio_stl_phys(VirtQueue *vq, hwaddr pa,
                                    uint32_t value)
 {
-    AddressSpace *dma_as = vdev->dma_as;
+    AddressSpace *dma_as = virtio_queue_get_dma_as(vq);
 
-    if (virtio_access_is_big_endian(vdev)) {
+    if (virtio_queue_access_is_big_endian(vq)) {
         stl_be_phys(dma_as, pa, value);
     } else {
         stl_le_phys(dma_as, pa, value);

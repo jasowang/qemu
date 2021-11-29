@@ -819,7 +819,7 @@ int virtio_gpu_create_mapping_iov(VirtIOGPU *g,
 
         do {
             len = l;
-            map = dma_memory_map(VIRTIO_DEVICE(g)->dma_as, a, &len,
+            map = dma_memory_map(virtio_queue_get_dma_as(g->cursor_vq), a, &len,
                                  DMA_DIRECTION_TO_DEVICE,
                                  MEMTXATTRS_UNSPECIFIED);
             if (!map) {
@@ -864,7 +864,7 @@ void virtio_gpu_cleanup_mapping_iov(VirtIOGPU *g,
     int i;
 
     for (i = 0; i < count; i++) {
-        dma_memory_unmap(VIRTIO_DEVICE(g)->dma_as,
+             dma_memory_unmap(virtio_queue_get_dma_as(g->cursor_vq),
                          iov[i].iov_base, iov[i].iov_len,
                          DMA_DIRECTION_TO_DEVICE,
                          iov[i].iov_len);
@@ -1258,14 +1258,15 @@ static int virtio_gpu_load(QEMUFile *f, void *opaque, size_t size,
         for (i = 0; i < res->iov_cnt; i++) {
             hwaddr len = res->iov[i].iov_len;
             res->iov[i].iov_base =
-                dma_memory_map(VIRTIO_DEVICE(g)->dma_as, res->addrs[i], &len,
+                dma_memory_map(virtio_queue_get_dma_as(g->cursor_vq),
+                               res->addrs[i], &len,
                                DMA_DIRECTION_TO_DEVICE,
                                MEMTXATTRS_UNSPECIFIED);
 
             if (!res->iov[i].iov_base || len != res->iov[i].iov_len) {
                 /* Clean up the half-a-mapping we just created... */
                 if (res->iov[i].iov_base) {
-                    dma_memory_unmap(VIRTIO_DEVICE(g)->dma_as,
+                    dma_memory_unmap(virtio_queue_get_dma_as(g->cursor_vq),
                                      res->iov[i].iov_base,
                                      len,
                                      DMA_DIRECTION_TO_DEVICE,
