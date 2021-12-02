@@ -934,7 +934,8 @@ static const MemoryRegionOps pnv_phb3_msi_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN
 };
 
-static AddressSpace *pnv_phb3_dma_iommu(PCIBus *bus, void *opaque, int devfn)
+static AddressSpace *pnv_phb3_dma_iommu(PCIBus *bus, void *opaque,
+                                        int devfn, uint32_t pasid)
 {
     PnvPHB3 *phb = opaque;
     PnvPhb3DMASpace *ds;

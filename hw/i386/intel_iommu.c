@@ -4000,14 +4000,15 @@ static void vtd_reset(DeviceState *dev)
     vtd_address_space_refresh_all(s);
 }
 
-static AddressSpace *vtd_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
+static AddressSpace *vtd_host_dma_iommu(PCIBus *bus, void *opaque,
+                                        int devfn, uint32_t pasid)
 {
     IntelIOMMUState *s = opaque;
     VTDAddressSpace *vtd_as;
 
     assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
 
-    vtd_as = vtd_find_add_as(s, bus, devfn, PCI_NO_PASID);
+    vtd_as = vtd_find_add_as(s, bus, devfn, pasid);
     return &vtd_as->as;
 }
 
@@ -4135,7 +4136,8 @@ static void vtd_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(s), 0, Q35_HOST_BRIDGE_IOMMU_ADDR);
     pci_setup_iommu(bus, vtd_host_dma_iommu, dev);
     /* Pseudo address space under root PCI bus. */
-    x86ms->ioapic_as = vtd_host_dma_iommu(bus, s, Q35_PSEUDO_DEVFN_IOAPIC);
+    x86ms->ioapic_as = vtd_host_dma_iommu(bus, s,
+                                          Q35_PSEUDO_DEVFN_IOAPIC, PCI_NO_PASID);
     qemu_add_machine_init_done_notifier(&vtd_machine_done_notify);
 }
 

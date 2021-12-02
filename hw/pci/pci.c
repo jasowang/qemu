@@ -2781,7 +2781,8 @@ static void pci_device_class_base_init(ObjectClass *klass, void *data)
     }
 }
 
-AddressSpace *pci_device_iommu_address_space(PCIDevice *dev)
+AddressSpace *pci_device_iommu_address_space_pasid(PCIDevice *dev,
+                                                   unsigned int pasid)
 {
     PCIBus *bus = pci_get_bus(dev);
     PCIBus *iommu_bus = bus;
@@ -2827,9 +2828,15 @@ AddressSpace *pci_device_iommu_address_space(PCIDevice *dev)
         iommu_bus = parent_bus;
     }
     if (!pci_bus_bypass_iommu(bus) && iommu_bus && iommu_bus->iommu_fn) {
-        return iommu_bus->iommu_fn(bus, iommu_bus->iommu_opaque, devfn);
+        return iommu_bus->iommu_fn(bus, iommu_bus->iommu_opaque,
+                                   devfn, pasid);
     }
     return &address_space_memory;
+}
+
+AddressSpace *pci_device_iommu_address_space(PCIDevice *dev)
+{
+    return pci_device_iommu_address_space_pasid(dev, PCI_NO_PASID);
 }
 
 void pci_setup_iommu(PCIBus *bus, PCIIOMMUFunc fn, void *opaque)

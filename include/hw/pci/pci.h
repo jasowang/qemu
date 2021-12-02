@@ -521,9 +521,11 @@ void pci_bus_get_w64_range(PCIBus *bus, Range *range);
 
 void pci_device_deassert_intx(PCIDevice *dev);
 
-typedef AddressSpace *(*PCIIOMMUFunc)(PCIBus *, void *, int);
+typedef AddressSpace *(*PCIIOMMUFunc)(PCIBus *, void *, int, uint32_t);
 
 AddressSpace *pci_device_iommu_address_space(PCIDevice *dev);
+AddressSpace *pci_device_iommu_address_space_pasid(PCIDevice *dev,
+                                                   unsigned int pasid);
 void pci_setup_iommu(PCIBus *bus, PCIIOMMUFunc fn, void *opaque);
 
 pcibus_t pci_bar_address(PCIDevice *d,

@@ -1395,7 +1395,8 @@ static const MemoryRegionOps amdvi_ir_ops = {
     }
 };
 
-static AddressSpace *amdvi_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
+static AddressSpace *amdvi_host_dma_iommu(PCIBus *bus, void *opaque,
+                                          int devfn, uint32_t pasid)
 {
     char name[128];
     AMDVIState *s = opaque;
@@ -1572,7 +1573,8 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     }
 
     /* Pseudo address space under root PCI bus. */
-    x86ms->ioapic_as = amdvi_host_dma_iommu(bus, s, AMDVI_IOAPIC_SB_DEVID);
+    x86ms->ioapic_as = amdvi_host_dma_iommu(bus, s, AMDVI_IOAPIC_SB_DEVID,
+                                            PCI_NO_PASID);
 
     /* set up MMIO */
     memory_region_init_io(&s->mmio, OBJECT(s), &mmio_mem_ops, s, "amdvi-mmio",
