@@ -58,7 +58,6 @@ typedef struct VTDContextEntry VTDContextEntry;
 typedef struct VTDContextCacheEntry VTDContextCacheEntry;
 typedef struct VTDAddressSpace VTDAddressSpace;
 typedef struct VTDIOTLBEntry VTDIOTLBEntry;
-typedef struct VTDBus VTDBus;
 typedef union VTD_IR_TableEntry VTD_IR_TableEntry;
 typedef union VTD_IR_MSIAddress VTD_IR_MSIAddress;
 typedef struct VTDPASIDDirEntry VTDPASIDDirEntry;
@@ -109,12 +108,6 @@ struct VTDAddressSpace {
     /* Superset of notifier flags that this address space has */
     IOMMUNotifierFlag notifier_flags;
     IOVATree *iova_tree;          /* Traces mapped IOVA ranges */
-};
-
-struct VTDBus {
-    PCIBus* bus;		/* A reference to the bus to provide translation for */
-    /* A table of VTDAddressSpace objects indexed by devfn */
-    VTDAddressSpace *dev_as[];
 };
 
 struct VTDIOTLBEntry {
@@ -252,8 +245,7 @@ struct IntelIOMMUState {
     uint32_t context_cache_gen;     /* Should be in [1,MAX] */
     GHashTable *iotlb;              /* IOTLB */
 
-    GHashTable *vtd_as_by_busptr;   /* VTDBus objects indexed by PCIBus* reference */
-    VTDBus *vtd_as_by_bus_num[VTD_PCI_BUS_MAX]; /* VTDBus objects indexed by bus number */
+    GHashTable *vtd_as;             /* VTD address space indexed by source id*/
     /* list of registered notifiers */
     QLIST_HEAD(, VTDAddressSpace) vtd_as_with_notifiers;
 

@@ -61,6 +61,11 @@
     }                                                                         \
 }
 
+struct vtd_as_key {
+    PCIBus *bus;
+    uint8_t devfn;
+};
+
 static void vtd_address_space_refresh_all(IntelIOMMUState *s);
 static void vtd_address_space_unmap(VTDAddressSpace *as, IOMMUNotifier *n);
 
@@ -190,12 +195,18 @@ static inline gboolean vtd_as_has_map_notifier(VTDAddressSpace *as)
 /* GHashTable functions */
 static gboolean vtd_uint64_equal(gconstpointer v1, gconstpointer v2)
 {
-    return *((const uint64_t *)v1) == *((const uint64_t *)v2);
+    const struct vtd_as_key *key1 = v1;
+    const struct vtd_as_key *key2 = v2;
+
+    return (key1->bus == key2->bus) && (key1->devfn == key2->devfn);
 }
 
 static guint vtd_uint64_hash(gconstpointer v)
 {
-    return (guint)*(const uint64_t *)v;
+    const struct vtd_as_key *key = v;
+    guint value = (guint)(uintptr_t)key->bus;
+
+    return (guint)(value << 8 | key->devfn);
 }
 
 static gboolean vtd_hash_remove_by_domain(gpointer key, gpointer value,
@@ -236,22 +247,14 @@ static gboolean vtd_hash_remove_by_page(gpointer key, gpointer value,
 static void vtd_reset_context_cache_locked(IntelIOMMUState *s)
 {
     VTDAddressSpace *vtd_as;
-    VTDBus *vtd_bus;
-    GHashTableIter bus_it;
-    uint32_t devfn_it;
+    GHashTableIter as_it;
 
     trace_vtd_context_cache_reset();
 
-    g_hash_table_iter_init(&bus_it, s->vtd_as_by_busptr);
+    g_hash_table_iter_init(&as_it, s->vtd_as);
 
-    while (g_hash_table_iter_next (&bus_it, NULL, (void**)&vtd_bus)) {
-        for (devfn_it = 0; devfn_it < PCI_DEVFN_MAX; ++devfn_it) {
-            vtd_as = vtd_bus->dev_as[devfn_it];
-            if (!vtd_as) {
-                continue;
-            }
-            vtd_as->context_cache_entry.context_cache_gen = 0;
-        }
+    while (g_hash_table_iter_next (&as_it, NULL, (void**)&vtd_as)) {
+        vtd_as->context_cache_entry.context_cache_gen = 0;
     }
     s->context_cache_gen = 1;
 }
@@ -986,32 +989,6 @@ static bool vtd_slpte_nonzero_rsvd(uint64_t slpte, uint32_t level)
     return slpte & rsvd_mask;
 }
 
-/* Find the VTD address space associated with a given bus number */
-static VTDBus *vtd_find_as_from_bus_num(IntelIOMMUState *s, uint8_t bus_num)
-{
-    VTDBus *vtd_bus = s->vtd_as_by_bus_num[bus_num];
-    GHashTableIter iter;
-
-    if (vtd_bus) {
-        return vtd_bus;
-    }
-
-    /*
-     * Iterate over the registered buses to find the one which
-     * currently holds this bus number and update the bus_num
-     * lookup table.
-     */
-    g_hash_table_iter_init(&iter, s->vtd_as_by_busptr);
-    while (g_hash_table_iter_next(&iter, NULL, (void **)&vtd_bus)) {
-        if (pci_bus_num(vtd_bus->bus) == bus_num) {
-            s->vtd_as_by_bus_num[bus_num] = vtd_bus;
-            return vtd_bus;
-        }
-    }
-
-    return NULL;
-}
-
 /* Given the @iova, get relevant @slptep. @slpte_level will be the last level
  * of the translation, can be used for deciding the size of large page.
  */
@@ -1604,18 +1581,12 @@ static bool vtd_switch_address_space(VTDAddressSpace *as)
 
 static void vtd_switch_address_space_all(IntelIOMMUState *s)
 {
+    VTDAddressSpace *vtd_as;
     GHashTableIter iter;
-    VTDBus *vtd_bus;
-    int i;
 
-    g_hash_table_iter_init(&iter, s->vtd_as_by_busptr);
-    while (g_hash_table_iter_next(&iter, NULL, (void **)&vtd_bus)) {
-        for (i = 0; i < PCI_DEVFN_MAX; i++) {
-            if (!vtd_bus->dev_as[i]) {
-                continue;
-            }
-            vtd_switch_address_space(vtd_bus->dev_as[i]);
-        }
+    g_hash_table_iter_init(&iter, s->vtd_as);
+    while (g_hash_table_iter_next(&iter, NULL, (void **)&vtd_as)) {
+        vtd_switch_address_space(vtd_as);
     }
 }
 
@@ -1659,16 +1630,11 @@ static inline bool vtd_is_interrupt_addr(hwaddr addr)
 
 static void vtd_pt_enable_fast_path(IntelIOMMUState *s, uint16_t source_id)
 {
-    VTDBus *vtd_bus;
     VTDAddressSpace *vtd_as;
     bool success = false;
+    uintptr_t key = (uintptr_t)source_id;
 
-    vtd_bus = vtd_find_as_from_bus_num(s, VTD_SID_TO_BUS(source_id));
-    if (!vtd_bus) {
-        goto out;
-    }
-
-    vtd_as = vtd_bus->dev_as[VTD_SID_TO_DEVFN(source_id)];
+    vtd_as = g_hash_table_lookup(s->vtd_as, &key);
     if (!vtd_as) {
         goto out;
     }
@@ -1876,11 +1842,10 @@ static void vtd_context_device_invalidate(IntelIOMMUState *s,
                                           uint16_t source_id,
                                           uint16_t func_mask)
 {
+    GHashTableIter as_it;
     uint16_t mask;
-    VTDBus *vtd_bus;
     VTDAddressSpace *vtd_as;
     uint8_t bus_n, devfn;
-    uint16_t devfn_it;
 
     trace_vtd_inv_desc_cc_devices(source_id, func_mask);
 
@@ -1903,32 +1868,31 @@ static void vtd_context_device_invalidate(IntelIOMMUState *s,
     mask = ~mask;
 
     bus_n = VTD_SID_TO_BUS(source_id);
-    vtd_bus = vtd_find_as_from_bus_num(s, bus_n);
-    if (vtd_bus) {
-        devfn = VTD_SID_TO_DEVFN(source_id);
-        for (devfn_it = 0; devfn_it < PCI_DEVFN_MAX; ++devfn_it) {
-            vtd_as = vtd_bus->dev_as[devfn_it];
-            if (vtd_as && ((devfn_it & mask) == (devfn & mask))) {
-                trace_vtd_inv_desc_cc_device(bus_n, VTD_PCI_SLOT(devfn_it),
-                                             VTD_PCI_FUNC(devfn_it));
-                vtd_iommu_lock(s);
-                vtd_as->context_cache_entry.context_cache_gen = 0;
-                vtd_iommu_unlock(s);
-                /*
-                 * Do switch address space when needed, in case if the
-                 * device passthrough bit is switched.
-                 */
-                vtd_switch_address_space(vtd_as);
-                /*
-                 * So a device is moving out of (or moving into) a
-                 * domain, resync the shadow page table.
-                 * This won't bring bad even if we have no such
-                 * notifier registered - the IOMMU notification
-                 * framework will skip MAP notifications if that
-                 * happened.
-                 */
-                vtd_sync_shadow_page_table(vtd_as);
-            }
+    devfn = VTD_SID_TO_DEVFN(source_id);
+
+    g_hash_table_iter_init(&as_it, s->vtd_as);
+    while (g_hash_table_iter_next(&as_it, NULL, (void**)&vtd_as)) {
+        if ((pci_bus_num(vtd_as->bus) == bus_n) &&
+            (vtd_as->devfn & mask) == (devfn & mask)) {
+            trace_vtd_inv_desc_cc_device(bus_n, VTD_PCI_SLOT(vtd_as->devfn),
+                                         VTD_PCI_FUNC(vtd_as->devfn));
+            vtd_iommu_lock(s);
+            vtd_as->context_cache_entry.context_cache_gen = 0;
+            vtd_iommu_unlock(s);
+            /*
+             * Do switch address space when needed, in case if the
+             * device passthrough bit is switched.
+             */
+            vtd_switch_address_space(vtd_as);
+            /*
+             * So a device is moving out of (or moving into) a
+             * domain, resync the shadow page table.
+             * This won't bring bad even if we have no such
+             * notifier registered - the IOMMU notification
+             * framework will skip MAP notifications if that
+             * happened.
+             */
+            vtd_sync_shadow_page_table(vtd_as);
         }
     }
 }
@@ -2442,18 +2406,14 @@ static bool vtd_process_device_iotlb_desc(IntelIOMMUState *s,
 {
     VTDAddressSpace *vtd_dev_as;
     IOMMUTLBEvent event;
-    struct VTDBus *vtd_bus;
+    uintptr_t key;
     hwaddr addr;
     uint64_t sz;
     uint16_t sid;
-    uint8_t devfn;
     bool size;
-    uint8_t bus_num;
 
     addr = VTD_INV_DESC_DEVICE_IOTLB_ADDR(inv_desc->hi);
     sid = VTD_INV_DESC_DEVICE_IOTLB_SID(inv_desc->lo);
-    devfn = sid & 0xff;
-    bus_num = sid >> 8;
     size = VTD_INV_DESC_DEVICE_IOTLB_SIZE(inv_desc->hi);
 
     if ((inv_desc->lo & VTD_INV_DESC_DEVICE_IOTLB_RSVD_LO) ||
@@ -2464,12 +2424,8 @@ static bool vtd_process_device_iotlb_desc(IntelIOMMUState *s,
         return false;
     }
 
-    vtd_bus = vtd_find_as_from_bus_num(s, bus_num);
-    if (!vtd_bus) {
-        goto done;
-    }
-
-    vtd_dev_as = vtd_bus->dev_as[devfn];
+    key = (uintptr_t)sid;
+    vtd_dev_as = g_hash_table_lookup(s->vtd_as, &key);
     if (!vtd_dev_as) {
         goto done;
     }
@@ -3390,27 +3346,22 @@ static const MemoryRegionOps vtd_mem_ir_ops = {
 
 VTDAddressSpace *vtd_find_add_as(IntelIOMMUState *s, PCIBus *bus, int devfn)
 {
-    uintptr_t key = (uintptr_t)bus;
-    VTDBus *vtd_bus = g_hash_table_lookup(s->vtd_as_by_busptr, &key);
-    VTDAddressSpace *vtd_dev_as;
+    struct vtd_as_key key = {
+        .bus = bus,
+        .devfn = devfn,
+    };
+    VTDAddressSpace *vtd_dev_as = g_hash_table_lookup(s->vtd_as, &key);
     char name[128];
 
-    if (!vtd_bus) {
-        uintptr_t *new_key = g_malloc(sizeof(*new_key));
-        *new_key = (uintptr_t)bus;
-        /* No corresponding free() */
-        vtd_bus = g_malloc0(sizeof(VTDBus) + sizeof(VTDAddressSpace *) * \
-                            PCI_DEVFN_MAX);
-        vtd_bus->bus = bus;
-        g_hash_table_insert(s->vtd_as_by_busptr, new_key, vtd_bus);
-    }
-
-    vtd_dev_as = vtd_bus->dev_as[devfn];
-
     if (!vtd_dev_as) {
+        struct vtd_as_key *new_key = g_malloc(sizeof(*new_key));
+
+        new_key->bus = bus;
+        new_key->devfn = devfn;
+
         snprintf(name, sizeof(name), "vtd-%02x.%x", PCI_SLOT(devfn),
                  PCI_FUNC(devfn));
-        vtd_bus->dev_as[devfn] = vtd_dev_as = g_malloc0(sizeof(VTDAddressSpace));
+        vtd_dev_as = g_malloc0(sizeof(VTDAddressSpace));
 
         vtd_dev_as->bus = bus;
         vtd_dev_as->devfn = (uint8_t)devfn;
@@ -3466,6 +3417,8 @@ VTDAddressSpace *vtd_find_add_as(IntelIOMMUState *s, PCIBus *bus, int devfn)
                                             &vtd_dev_as->nodmar, 0);
 
         vtd_switch_address_space(vtd_dev_as);
+
+        g_hash_table_insert(s->vtd_as, new_key, vtd_dev_as);
     }
     return vtd_dev_as;
 }
@@ -3750,6 +3703,7 @@ static AddressSpace *vtd_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
     assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
 
     vtd_as = vtd_find_add_as(s, bus, devfn);
+
     return &vtd_as->as;
 }
 
@@ -3835,7 +3789,6 @@ static void vtd_realize(DeviceState *dev, Error **errp)
 
     QLIST_INIT(&s->vtd_as_with_notifiers);
     qemu_mutex_init(&s->iommu_lock);
-    memset(s->vtd_as_by_bus_num, 0, sizeof(s->vtd_as_by_bus_num));
     memory_region_init_io(&s->csrmem, OBJECT(s), &vtd_mem_ops, s,
                           "intel_iommu", DMAR_REG_SIZE);
 
@@ -3857,8 +3810,8 @@ static void vtd_realize(DeviceState *dev, Error **errp)
     /* No corresponding destroy */
     s->iotlb = g_hash_table_new_full(vtd_uint64_hash, vtd_uint64_equal,
                                      g_free, g_free);
-    s->vtd_as_by_busptr = g_hash_table_new_full(vtd_uint64_hash, vtd_uint64_equal,
-                                              g_free, g_free);
+    s->vtd_as = g_hash_table_new_full(vtd_uint64_hash, vtd_uint64_equal,
+                                      g_free, g_free);
     vtd_init(s);
     sysbus_mmio_map(SYS_BUS_DEVICE(s), 0, Q35_HOST_BRIDGE_IOMMU_ADDR);
     pci_setup_iommu(bus, vtd_host_dma_iommu, dev);
