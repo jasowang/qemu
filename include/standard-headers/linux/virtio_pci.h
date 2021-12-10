@@ -129,6 +129,21 @@ struct virtio_pci_cap {
 	uint32_t length;		/* Length of the structure, in bytes. */
 };
 
+/* This is the PCIe capability header: */
+struct virtio_pci_ecap {
+        uint16_t cap_vndr;              /* Generic PCIe field: PCI_EXT_CAP_ID_VNDR */
+        uint16_t cap_rev:4;             /* Generic PCIe field: capability version: 0x1 */
+        uint16_t cap_next:12;           /* Generic PCIe field: next ptr. */
+        uint16_t cfg_type;              /* Identifies the structure. */
+        uint16_t cfg_rev:4;             /* Identifies the version of the structure. */
+        uint16_t cap_len:12;            /* The bytes of the entire VSEC */
+        uint8_t bar;                    /* Where to find it. */
+        uint8_t id;                     /* Multiple capabilities of the same type */
+        uint8_t padding[2];             /* Pad to full dword. */
+        uint32_t offset;                /* Offset within bar. */
+        uint32_t length;                /* Length of the structure, in bytes. */
+};
+
 struct virtio_pci_cap64 {
 	struct virtio_pci_cap cap;
 	uint32_t offset_hi;             /* Most sig 32 bits of offset */
