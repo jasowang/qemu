@@ -1169,6 +1169,22 @@ static int virtio_pci_add_mem_cap(VirtIOPCIProxy *proxy,
     return offset;
 }
 
+static void virtio_pci_add_mem_cap_ext(VirtIOPCIProxy *proxy,
+                                       struct virtio_pci_ecap *ecap)
+{
+    PCIDevice *dev = &proxy->pci_dev;
+
+    pcie_add_capability(dev, PCI_EXT_CAP_ID_VNDR, ecap->cfg_rev,
+                        proxy->last_pcie_cap_offset, ecap->cap_len);
+
+    memcpy(dev->config + proxy->last_pcie_cap_offset + 4, &ecap->cfg_type,
+           ecap->cap_len - 4);
+
+    proxy->last_pcie_cap_offset += ecap->cap_len;
+
+    return;
+}
+
 static uint64_t virtio_pci_common_read(void *opaque, hwaddr addr,
                                        unsigned size)
 {
@@ -1477,6 +1493,69 @@ static void virtio_pci_device_write(void *opaque, hwaddr addr,
     }
 }
 
+static uint64_t virtio_pci_pasid_read(void *opaque, hwaddr addr,
+                                      unsigned size)
+{
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+    uint64_t val;
+
+    if (vdev == NULL) {
+        return UINT64_MAX;
+    }
+
+    switch (addr) {
+    case VIRTIO_PCI_PASID_GROUPS:
+        val = VIRTIO_QUEUE_MAX;
+        break;
+    case VIRTIO_PCI_PASID_Q_SELECT:
+        val = proxy->pasid_q_select;
+        break;
+    case VIRTIO_PCI_PASID_Q_GROUP_ID:
+        val = proxy->pasid_q_select;
+        break;
+    case VIRTIO_PCI_PASID_G_SELECT:
+        val = proxy->pasid_g_select;
+        break;
+    case VIRTIO_PCI_PASID_G_PASID:
+        val = proxy->vqs[proxy->pasid_g_select].pasid;
+        break;
+    default:
+        val = 0;
+        break;
+    }
+
+    return val;
+}
+
+static void virtio_pci_pasid_write(void *opaque, hwaddr addr,
+                                   uint64_t val, unsigned size)
+{
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+    AddressSpace *dma_as;
+
+    if (vdev == NULL) {
+        return;
+    }
+
+    switch (addr) {
+    case VIRTIO_PCI_PASID_Q_SELECT:
+        proxy->pasid_q_select = val;
+        break;
+    case VIRTIO_PCI_PASID_G_SELECT:
+        proxy->pasid_g_select = val;
+        break;
+    case VIRTIO_PCI_PASID_G_PASID:
+        proxy->vqs[proxy->pasid_g_select].pasid = val;
+        dma_as = pci_device_iommu_address_space_pasid(&proxy->pci_dev, val);
+        virtio_queue_switch_dma_as(vdev, proxy->pasid_g_select, dma_as);
+        break;
+    default:
+        break;
+    }
+}
+
 static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy,
                                            const char *vdev_name)
 {
@@ -1525,6 +1604,15 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy,
         },
         .endianness = DEVICE_LITTLE_ENDIAN,
     };
+    static const MemoryRegionOps pasid_ops = {
+        .read = virtio_pci_pasid_read,
+        .write = virtio_pci_pasid_write,
+        .impl = {
+            .min_access_size = 1,
+            .max_access_size = 4,
+        },
+        .endianness = DEVICE_LITTLE_ENDIAN,
+    };
     g_autoptr(GString) name = g_string_new(NULL);
 
     g_string_printf(name, "virtio-pci-common-%s", vdev_name);
@@ -1561,6 +1649,13 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy,
                           proxy,
                           name->str,
                           proxy->notify_pio.size);
+
+    g_string_printf(name, "virtio-pci-pasid-%s", vdev_name);
+    memory_region_init_io(&proxy->pasid.mr, OBJECT(proxy),
+                          &pasid_ops,
+                          proxy,
+                          name->str,
+                          proxy->pasid.size);
 }
 
 static void virtio_pci_modern_region_map(VirtIOPCIProxy *proxy,
@@ -1575,8 +1670,23 @@ static void virtio_pci_modern_region_map(VirtIOPCIProxy *proxy,
     cap->bar = bar;
     cap->offset = cpu_to_le32(region->offset);
     cap->length = cpu_to_le32(region->size);
-    virtio_pci_add_mem_cap(proxy, cap);
 
+    virtio_pci_add_mem_cap(proxy, cap);
+}
+
+static void virtio_pci_modern_region_map_ext(VirtIOPCIProxy *proxy,
+                                             VirtIOPCIRegion *region,
+                                             struct virtio_pci_ecap *ecap,
+                                             MemoryRegion *mr,
+                                             uint8_t bar)
+{
+    memory_region_add_subregion(mr, region->offset, &region->mr);
+
+    ecap->bar = bar;
+    ecap->offset = cpu_to_le32(region->offset);
+    ecap->length = cpu_to_le32(region->size);
+
+    virtio_pci_add_mem_cap_ext(proxy, ecap);
 }
 
 static void virtio_pci_modern_mem_region_map(VirtIOPCIProxy *proxy,
@@ -1585,6 +1695,14 @@ static void virtio_pci_modern_mem_region_map(VirtIOPCIProxy *proxy,
 {
     virtio_pci_modern_region_map(proxy, region, cap,
                                  &proxy->modern_bar, proxy->modern_mem_bar_idx);
+}
+
+static void virtio_pci_modern_mem_region_map_ext(VirtIOPCIProxy *proxy,
+                                                 VirtIOPCIRegion *region,
+                                                 struct virtio_pci_ecap *ecap)
+{
+    virtio_pci_modern_region_map_ext(proxy, region, ecap,
+                                     &proxy->modern_bar, proxy->modern_mem_bar_idx);
 }
 
 static void virtio_pci_modern_io_region_map(VirtIOPCIProxy *proxy,
@@ -1625,10 +1743,14 @@ static void virtio_pci_pre_plugged(DeviceState *d, Error **errp)
 static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
 {
     VirtIOPCIProxy *proxy = VIRTIO_PCI(d);
+    PCIDevice *pci_dev = &proxy->pci_dev;
     VirtioBusState *bus = &proxy->bus;
     bool legacy = virtio_pci_legacy(proxy);
     bool modern;
     bool modern_pio = proxy->flags & VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY;
+    bool pcie_port = pci_bus_is_express(pci_get_bus(pci_dev)) &&
+                     !pci_bus_is_root(pci_get_bus(pci_dev));
+    bool has_pasid = proxy->flags & VIRTIO_PCI_FLAG_PASID;
     uint8_t *config;
     uint32_t size;
     VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
@@ -1711,7 +1833,11 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
             .cap.cap_len = sizeof notify,
             .notify_off_multiplier = cpu_to_le32(0x0),
         };
-
+        struct virtio_pci_ecap pasid_ecap = {
+            .cfg_type = VIRTIO_PCI_ECAP_PASID_CFG,
+            .cfg_rev = 0x1,
+            .cap_len = sizeof pasid_ecap,
+        };
         struct virtio_pci_cfg_cap *cfg_mask;
 
         virtio_pci_modern_regions_init(proxy, vdev->name);
@@ -1730,6 +1856,11 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
 
             virtio_pci_modern_io_region_map(proxy, &proxy->notify_pio,
                                             &notify_pio.cap);
+        }
+
+        if (pcie_port && pci_is_express(pci_dev) && has_pasid) {
+            virtio_pci_modern_mem_region_map_ext(proxy, &proxy->pasid,
+                                                 &pasid_ecap);
         }
 
         pci_register_bar(&proxy->pci_dev, proxy->modern_mem_bar_idx,
@@ -1781,6 +1912,7 @@ static void virtio_pci_device_unplugged(DeviceState *d)
     VirtIOPCIProxy *proxy = VIRTIO_PCI(d);
     bool modern = virtio_pci_modern(proxy);
     bool modern_pio = proxy->flags & VIRTIO_PCI_FLAG_MODERN_PIO_NOTIFY;
+    bool has_pasid = proxy->flags & VIRTIO_PCI_FLAG_PASID;
 
     virtio_pci_stop_ioeventfd(proxy);
 
@@ -1789,6 +1921,11 @@ static void virtio_pci_device_unplugged(DeviceState *d)
         virtio_pci_modern_mem_region_unmap(proxy, &proxy->isr);
         virtio_pci_modern_mem_region_unmap(proxy, &proxy->device);
         virtio_pci_modern_mem_region_unmap(proxy, &proxy->notify);
+
+        if (has_pasid) {
+            virtio_pci_modern_io_region_unmap(proxy, &proxy->pasid);
+        }
+
         if (modern_pio) {
             virtio_pci_modern_io_region_unmap(proxy, &proxy->notify_pio);
         }
@@ -1801,6 +1938,8 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
     VirtioPCIClass *k = VIRTIO_PCI_GET_CLASS(pci_dev);
     bool pcie_port = pci_bus_is_express(pci_get_bus(pci_dev)) &&
                      !pci_bus_is_root(pci_get_bus(pci_dev));
+    bool has_pasid = proxy->flags & VIRTIO_PCI_FLAG_PASID;
+    uint64_t bar_size;
 
     if (kvm_enabled() && !kvm_has_many_ioeventfds()) {
         proxy->flags &= ~VIRTIO_PCI_FLAG_USE_IOEVENTFD;
@@ -1842,14 +1981,24 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
     proxy->notify.size = virtio_pci_queue_mem_mult(proxy) * VIRTIO_QUEUE_MAX;
     proxy->notify.type = VIRTIO_PCI_CAP_NOTIFY_CFG;
 
+    bar_size = proxy->notify.offset + proxy->notify.size;
+
+    proxy->pasid.offset = bar_size;
+    proxy->pasid.size = 0x1000;
+    proxy->pasid.type = VIRTIO_PCI_ECAP_PASID_CFG;
+
     proxy->notify_pio.offset = 0x0;
     proxy->notify_pio.size = 0x4;
     proxy->notify_pio.type = VIRTIO_PCI_CAP_NOTIFY_CFG;
 
+    if (has_pasid) {
+        bar_size += proxy->pasid.size;
+    }
+
     /* subclasses can enforce modern, so do this unconditionally */
     memory_region_init(&proxy->modern_bar, OBJECT(proxy), "virtio-pci",
                        /* PCI BAR regions must be powers of 2 */
-                       pow2ceil(proxy->notify.offset + proxy->notify.size));
+                       pow2ceil(bar_size));
 
     if (proxy->disable_legacy == ON_OFF_AUTO_AUTO) {
         proxy->disable_legacy = pcie_port ? ON_OFF_AUTO_ON : ON_OFF_AUTO_OFF;
@@ -1912,10 +2061,18 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
             last_pcie_cap_offset += PCI_EXT_CAP_ATS_SIZEOF;
         }
 
+        if (proxy->flags & VIRTIO_PCI_FLAG_PASID) {
+            pcie_pasid_init(pci_dev, last_pcie_cap_offset, 20,
+                            false, false);
+            last_pcie_cap_offset += PCI_EXT_CAP_PASID_SIZEOF;
+        }
+
         if (proxy->flags & VIRTIO_PCI_FLAG_INIT_FLR) {
             /* Set Function Level Reset capability bit */
             pcie_cap_flr_init(pci_dev);
         }
+
+        proxy->last_pcie_cap_offset = last_pcie_cap_offset;
     } else {
         /*
          * make future invocations of pci_is_express() return false
@@ -1947,6 +2104,8 @@ static void virtio_pci_reset(DeviceState *qdev)
 {
     VirtIOPCIProxy *proxy = VIRTIO_PCI(qdev);
     VirtioBusState *bus = VIRTIO_BUS(&proxy->bus);
+    PCIDevice *dev = PCI_DEVICE(qdev);
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
     int i;
 
     virtio_bus_reset(bus);
@@ -1958,14 +2117,20 @@ static void virtio_pci_reset(DeviceState *qdev)
         proxy->vqs[i].desc[0] = proxy->vqs[i].desc[1] = 0;
         proxy->vqs[i].avail[0] = proxy->vqs[i].avail[1] = 0;
         proxy->vqs[i].used[0] = proxy->vqs[i].used[1] = 0;
+        proxy->vqs[i].pasid = VIRTIO_PASID_NO_ID;
+        virtio_queue_switch_dma_as(vdev, i, pci_get_address_space(dev));
     }
 }
 
 static void virtio_pci_bus_reset(DeviceState *qdev)
 {
     PCIDevice *dev = PCI_DEVICE(qdev);
+    VirtIOPCIProxy *proxy = VIRTIO_PCI(qdev);
 
     virtio_pci_reset(qdev);
+
+    proxy->pasid_q_select = 0;
+    proxy->pasid_g_select = 0;
 
     if (pci_is_express(dev)) {
         pcie_cap_deverr_reset(dev);
@@ -2002,6 +2167,8 @@ static Property virtio_pci_properties[] = {
                     VIRTIO_PCI_FLAG_INIT_FLR_BIT, true),
     DEFINE_PROP_BIT("aer", VirtIOPCIProxy, flags,
                     VIRTIO_PCI_FLAG_AER_BIT, false),
+    DEFINE_PROP_BIT("pasid", VirtIOPCIProxy, flags,
+                    VIRTIO_PCI_FLAG_PASID_BIT, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

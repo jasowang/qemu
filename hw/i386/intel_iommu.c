@@ -1835,6 +1835,7 @@ static bool vtd_do_iommu_translate(VTDAddressSpace *vtd_as, PCIBus *bus,
     bool rid2pasid = (pasid == PCI_NO_PASID) && s->root_scalable;
     VTDIOTLBEntry *iotlb_entry;
 
+    fprintf(stderr, "pasid is %" PRIx32"\n", pasid);
     /*
      * We have standalone memory region for interrupt addresses, we
      * should never receive translation requests in this region.

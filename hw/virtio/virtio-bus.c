@@ -98,6 +98,8 @@ void virtio_bus_device_plugged(VirtIODevice *vdev, Error **errp)
         dma_as = &address_space_memory;
     }
 
+    fprintf(stderr, "set dev %s as to %s\n",
+            vdev->name, dma_as->name);
     for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
         virtio_queue_set_dma_as(vdev, i, dma_as);
     }

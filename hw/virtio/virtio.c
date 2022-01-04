@@ -709,7 +709,12 @@ void virtio_queue_switch_dma_as(VirtIODevice *vdev, int n,
 {
     VirtQueue *vq = &vdev->vq[n];
 
+    if (vq->dma_as == dma_as)
+        return;
+
     memory_listener_unregister(&vq->listener);
+    fprintf(stderr, "dma as switch from %s to %s\n",
+            vq->dma_as->name, dma_as->name);
     vq->dma_as = dma_as;
     memory_listener_register(&vq->listener, vq->dma_as);
 }
