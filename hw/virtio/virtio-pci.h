@@ -43,6 +43,7 @@ enum {
     VIRTIO_PCI_FLAG_INIT_FLR_BIT,
     VIRTIO_PCI_FLAG_AER_BIT,
     VIRTIO_PCI_FLAG_ATS_PAGE_ALIGNED_BIT,
+    VIRTIO_PCI_FLAG_PASID_BIT,
 };
 
 /* Need to activate work-arounds for buggy guests at vmstate load. */
@@ -89,6 +90,9 @@ enum {
 #define VIRTIO_PCI_FLAG_ATS_PAGE_ALIGNED \
   (1 << VIRTIO_PCI_FLAG_ATS_PAGE_ALIGNED_BIT)
 
+/* PASID */
+#define VIRTIO_PCI_FLAG_PASID (1 << VIRTIO_PCI_FLAG_PASID_BIT)
+
 typedef struct {
     MSIMessage msg;
     int virq;
@@ -120,6 +124,7 @@ typedef struct VirtIOPCIQueue {
   uint32_t desc[2];
   uint32_t avail[2];
   uint32_t used[2];
+  uint32_t pasid;
 } VirtIOPCIQueue;
 
 struct VirtIOPCIProxy {
@@ -132,8 +137,9 @@ struct VirtIOPCIProxy {
             VirtIOPCIRegion device;
             VirtIOPCIRegion notify;
             VirtIOPCIRegion notify_pio;
+            VirtIOPCIRegion pasid;
         };
-        VirtIOPCIRegion regs[5];
+        VirtIOPCIRegion regs[6];
     };
     MemoryRegion modern_bar;
     MemoryRegion io_bar;
@@ -156,6 +162,9 @@ struct VirtIOPCIProxy {
     VirtIOIRQFD *vector_irqfd;
     int nvqs_with_notifiers;
     VirtioBusState bus;
+    uint16_t last_pcie_cap_offset;
+    uint16_t pasid_q_select;
+    uint16_t pasid_g_select;
 };
 
 static inline bool virtio_pci_modern(VirtIOPCIProxy *proxy)
