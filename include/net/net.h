@@ -55,6 +55,8 @@ typedef struct NetOffloads {
 /* Net clients */
 
 typedef void (NetPoll)(NetClientState *, bool enable);
+typedef void (NetReadPoll)(NetClientState *, bool enable);
+typedef void (NetWritePoll)(NetClientState *, bool enable);
 typedef bool (NetCanReceive)(NetClientState *);
 typedef int (NetStart)(NetClientState *);
 typedef int (NetLoad)(NetClientState *);
@@ -96,6 +98,8 @@ typedef struct NetClientInfo {
     LinkStatusChanged *link_status_changed;
     QueryRxFilter *query_rx_filter;
     NetPoll *poll;
+    NetReadPoll *read_poll;
+    NetWritePoll *write_poll;
     HasUfo *has_ufo;
     HasUso *has_uso;
     HasTunnel *has_tunnel;

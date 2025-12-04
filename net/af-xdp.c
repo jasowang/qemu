@@ -72,7 +72,7 @@ static void af_xdp_update_fd_handler(AFXDPState *s)
 }
 
 /* Update the read handler. */
-static void af_xdp_read_poll(AFXDPState *s, bool enable)
+static void af_xdp_update_read_poll(AFXDPState *s, bool enable)
 {
     if (s->read_poll != enable) {
         s->read_poll = enable;
@@ -81,7 +81,7 @@ static void af_xdp_read_poll(AFXDPState *s, bool enable)
 }
 
 /* Update the write handler. */
-static void af_xdp_write_poll(AFXDPState *s, bool enable)
+static void af_xdp_update_write_poll(AFXDPState *s, bool enable)
 {
     if (s->write_poll != enable) {
         s->write_poll = enable;
@@ -98,6 +98,18 @@ static void af_xdp_poll(NetClientState *nc, bool enable)
         s->read_poll  = enable;
         af_xdp_update_fd_handler(s);
     }
+}
+
+static void af_xdp_read_poll(NetClientState *nc, bool enable)
+{
+    AFXDPState *s = DO_UPCAST(AFXDPState, nc, nc);
+    af_xdp_update_read_poll(s, enable);
+}
+
+static void af_xdp_write_poll(NetClientState *nc, bool enable)
+{
+    AFXDPState *s = DO_UPCAST(AFXDPState, nc, nc);
+    af_xdp_update_write_poll(s, enable);
 }
 
 static void af_xdp_complete_tx(AFXDPState *s)
@@ -135,7 +147,7 @@ static void af_xdp_writable(void *opaque)
      * and kernel needs a wake up.
      */
     if (!s->outstanding_tx || !xsk_ring_prod__needs_wakeup(&s->tx)) {
-        af_xdp_write_poll(s, false);
+        af_xdp_update_write_poll(s, false);
     }
 
     /* Flush any buffered packets. */
@@ -163,7 +175,7 @@ static ssize_t af_xdp_receive(NetClientState *nc,
          * Out of buffers or space in tx ring.  Poll until we can write.
          * This will also kick the Tx, if it was waiting on CQ.
          */
-        af_xdp_write_poll(s, true);
+        af_xdp_update_write_poll(s, true);
         return 0;
     }
 
@@ -178,7 +190,7 @@ static ssize_t af_xdp_receive(NetClientState *nc,
     s->outstanding_tx++;
 
     if (xsk_ring_prod__needs_wakeup(&s->tx)) {
-        af_xdp_write_poll(s, true);
+        af_xdp_update_write_poll(s, true);
     }
 
     return size;
@@ -192,7 +204,7 @@ static void af_xdp_send_completed(NetClientState *nc, ssize_t len)
 {
     AFXDPState *s = DO_UPCAST(AFXDPState, nc, nc);
 
-    af_xdp_read_poll(s, true);
+    af_xdp_update_read_poll(s, true);
 }
 
 static void af_xdp_fq_refill(AFXDPState *s, uint32_t n)
@@ -215,7 +227,7 @@ static void af_xdp_fq_refill(AFXDPState *s, uint32_t n)
 
     if (xsk_ring_prod__needs_wakeup(&s->fq)) {
         /* Receive was blocked by not having enough buffers.  Wake it up. */
-        af_xdp_read_poll(s, true);
+        af_xdp_update_read_poll(s, true);
     }
 }
 
@@ -246,7 +258,7 @@ static void af_xdp_send(void *opaque)
              * The peer does not receive anymore.  Packet is queued, stop
              * reading from the backend until af_xdp_send_completed().
              */
-            af_xdp_read_poll(s, false);
+            af_xdp_update_read_poll(s, false);
 
             /* Return unused descriptors to not break the ring cache. */
             xsk_ring_cons__cancel(&s->rx, n_rx - i - 1);
@@ -438,6 +450,8 @@ static NetClientInfo net_af_xdp_info = {
     .size = sizeof(AFXDPState),
     .receive = af_xdp_receive,
     .poll = af_xdp_poll,
+    .read_poll = af_xdp_read_poll,
+    .write_poll = af_xdp_write_poll,
     .cleanup = af_xdp_cleanup,
 };
 
@@ -571,7 +585,7 @@ int net_init_af_xdp(const Netdev *netdev,
         }
     }
 
-    af_xdp_read_poll(s, true); /* Initially only poll for reads. */
+    af_xdp_update_read_poll(s, true); /* Initially only poll for reads. */
 
     return 0;
 

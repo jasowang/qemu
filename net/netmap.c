@@ -113,7 +113,7 @@ static void netmap_update_fd_handler(NetmapState *s)
 }
 
 /* Update the read handler. */
-static void netmap_read_poll(NetmapState *s, bool enable)
+static void netmap_update_read_poll(NetmapState *s, bool enable)
 {
     if (s->read_poll != enable) { /* Do nothing if not changed. */
         s->read_poll = enable;
@@ -122,7 +122,7 @@ static void netmap_read_poll(NetmapState *s, bool enable)
 }
 
 /* Update the write handler. */
-static void netmap_write_poll(NetmapState *s, bool enable)
+static void netmap_update_write_poll(NetmapState *s, bool enable)
 {
     if (s->write_poll != enable) {
         s->write_poll = enable;
@@ -141,6 +141,18 @@ static void netmap_poll(NetClientState *nc, bool enable)
     }
 }
 
+static void netmap_read_poll(NetClientState *nc, bool enable)
+{
+    NetmapState *s = DO_UPCAST(NetmapState, nc, nc);
+    netmap_update_read_poll(s, enable);
+}
+
+static void netmap_write_poll(NetClientState *nc, bool enable)
+{
+    NetmapState *s = DO_UPCAST(NetmapState, nc, nc);
+    netmap_update_write_poll(s, enable);
+}
+
 /*
  * The fd_write() callback, invoked if the fd is marked as
  * writable after a poll. Unregister the handler and flush any
@@ -150,7 +162,7 @@ static void netmap_writable(void *opaque)
 {
     NetmapState *s = opaque;
 
-    netmap_write_poll(s, false);
+    netmap_update_write_poll(s, false);
     qemu_flush_queued_packets(&s->nc);
 }
 
@@ -175,7 +187,7 @@ static ssize_t netmap_receive_iov(NetClientState *nc,
          * ones), but without publishing any new slots to be processed
          * (e.g., we don't advance ring->head). */
         ring->cur = tail;
-        netmap_write_poll(s, true);
+        netmap_update_write_poll(s, true);
         return 0;
     }
 
@@ -195,7 +207,7 @@ static ssize_t netmap_receive_iov(NetClientState *nc,
                 /* We ran out of netmap slots while splitting the
                    iovec fragments. */
                 ring->cur = tail;
-                netmap_write_poll(s, true);
+                netmap_update_write_poll(s, true);
                 return 0;
             }
 
@@ -242,7 +254,7 @@ static void netmap_send_completed(NetClientState *nc, ssize_t len)
 {
     NetmapState *s = DO_UPCAST(NetmapState, nc, nc);
 
-    netmap_read_poll(s, true);
+    netmap_update_read_poll(s, true);
 }
 
 static void netmap_send(void *opaque)
@@ -289,7 +301,7 @@ static void netmap_send(void *opaque)
         if (iovsize == 0) {
             /* The peer does not receive anymore. Packet is queued, stop
              * reading from the backend until netmap_send_completed(). */
-            netmap_read_poll(s, false);
+            netmap_update_read_poll(s, false);
             break;
         }
     }
@@ -384,6 +396,8 @@ static NetClientInfo net_netmap_info = {
     .receive = netmap_receive,
     .receive_iov = netmap_receive_iov,
     .poll = netmap_poll,
+    .read_poll = netmap_read_poll,
+    .write_poll = netmap_write_poll,
     .cleanup = netmap_cleanup,
     .has_ufo = netmap_has_vnet_hdr,
     .has_vnet_hdr = netmap_has_vnet_hdr,
@@ -418,7 +432,7 @@ int net_init_netmap(const Netdev *netdev,
     s->rx = NETMAP_RXRING(nmd->nifp, 0);
     s->vnet_hdr_len = 0;
     pstrcpy(s->ifname, sizeof(s->ifname), netmap_opts->ifname);
-    netmap_read_poll(s, true); /* Initially only poll for reads. */
+    netmap_update_read_poll(s, true); /* Initially only poll for reads. */
 
     return 0;
 }

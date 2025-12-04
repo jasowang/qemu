@@ -143,7 +143,7 @@ static void l2tpv3_update_fd_handler(NetL2TPV3State *s)
                         s);
 }
 
-static void l2tpv3_read_poll(NetL2TPV3State *s, bool enable)
+static void l2tpv3_update_read_poll(NetL2TPV3State *s, bool enable)
 {
     if (s->read_poll != enable) {
         s->read_poll = enable;
@@ -151,7 +151,7 @@ static void l2tpv3_read_poll(NetL2TPV3State *s, bool enable)
     }
 }
 
-static void l2tpv3_write_poll(NetL2TPV3State *s, bool enable)
+static void l2tpv3_update_write_poll(NetL2TPV3State *s, bool enable)
 {
     if (s->write_poll != enable) {
         s->write_poll = enable;
@@ -162,21 +162,33 @@ static void l2tpv3_write_poll(NetL2TPV3State *s, bool enable)
 static void l2tpv3_writable(void *opaque)
 {
     NetL2TPV3State *s = opaque;
-    l2tpv3_write_poll(s, false);
+    l2tpv3_update_write_poll(s, false);
     qemu_flush_queued_packets(&s->nc);
 }
 
 static void l2tpv3_send_completed(NetClientState *nc, ssize_t len)
 {
     NetL2TPV3State *s = DO_UPCAST(NetL2TPV3State, nc, nc);
-    l2tpv3_read_poll(s, true);
+    l2tpv3_update_read_poll(s, true);
 }
 
 static void l2tpv3_poll(NetClientState *nc, bool enable)
 {
     NetL2TPV3State *s = DO_UPCAST(NetL2TPV3State, nc, nc);
-    l2tpv3_write_poll(s, enable);
-    l2tpv3_read_poll(s, enable);
+    l2tpv3_update_write_poll(s, enable);
+    l2tpv3_update_read_poll(s, enable);
+}
+
+static void l2tpv3_read_poll(NetClientState *nc, bool enable)
+{
+    NetL2TPV3State *s = DO_UPCAST(NetL2TPV3State, nc, nc);
+    l2tpv3_update_read_poll(s, enable);
+}
+
+static void l2tpv3_write_poll(NetClientState *nc, bool enable)
+{
+    NetL2TPV3State *s = DO_UPCAST(NetL2TPV3State, nc, nc);
+    l2tpv3_update_write_poll(s, enable);
 }
 
 static void l2tpv3_form_header(NetL2TPV3State *s)
@@ -252,7 +264,7 @@ static ssize_t net_l2tpv3_receive_dgram_iov(NetClientState *nc,
         /* signal upper layer that socket buffer is full */
         ret = -errno;
         if (ret == -EAGAIN || ret == -ENOBUFS) {
-            l2tpv3_write_poll(s, true);
+            l2tpv3_update_write_poll(s, true);
             ret = 0;
         }
     }
@@ -295,7 +307,7 @@ static ssize_t net_l2tpv3_receive_dgram(NetClientState *nc,
         ret = -errno;
         if (ret == -EAGAIN || ret == -ENOBUFS) {
             /* signal upper layer that socket buffer is full */
-            l2tpv3_write_poll(s, true);
+            l2tpv3_update_write_poll(s, true);
             ret = 0;
         }
     }
@@ -369,7 +381,7 @@ static void net_l2tpv3_process_queue(NetL2TPV3State *s)
                             l2tpv3_send_completed
                         );
                     if (size == 0) {
-                        l2tpv3_read_poll(s, false);
+                        l2tpv3_update_read_poll(s, false);
                     }
                     bad_read = false;
                 } else {
@@ -497,8 +509,8 @@ static void net_l2tpv3_cleanup(NetClientState *nc)
 {
     NetL2TPV3State *s = DO_UPCAST(NetL2TPV3State, nc, nc);
     qemu_purge_queued_packets(nc);
-    l2tpv3_read_poll(s, false);
-    l2tpv3_write_poll(s, false);
+    l2tpv3_update_read_poll(s, false);
+    l2tpv3_update_write_poll(s, false);
     if (s->fd >= 0) {
         close(s->fd);
     }
@@ -514,6 +526,8 @@ static NetClientInfo net_l2tpv3_info = {
     .receive = net_l2tpv3_receive_dgram,
     .receive_iov = net_l2tpv3_receive_dgram_iov,
     .poll = l2tpv3_poll,
+    .read_poll = l2tpv3_read_poll,
+    .write_poll = l2tpv3_write_poll,
     .cleanup = net_l2tpv3_cleanup,
 };
 
@@ -715,7 +729,7 @@ int net_init_l2tpv3(const Netdev *netdev,
     s->fd = fd;
     s->counter = 0;
 
-    l2tpv3_read_poll(s, true);
+    l2tpv3_update_read_poll(s, true);
 
     qemu_set_info_str(&s->nc, "l2tpv3: connected");
     return 0;

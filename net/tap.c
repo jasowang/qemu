@@ -99,13 +99,13 @@ static void tap_update_fd_handler(TAPState *s)
                         s);
 }
 
-static void tap_read_poll(TAPState *s, bool enable)
+static void tap_update_read_poll(TAPState *s, bool enable)
 {
     s->read_poll = enable;
     tap_update_fd_handler(s);
 }
 
-static void tap_write_poll(TAPState *s, bool enable)
+static void tap_update_write_poll(TAPState *s, bool enable)
 {
     s->write_poll = enable;
     tap_update_fd_handler(s);
@@ -115,7 +115,7 @@ static void tap_writable(void *opaque)
 {
     TAPState *s = opaque;
 
-    tap_write_poll(s, false);
+    tap_update_write_poll(s, false);
 
     qemu_flush_queued_packets(&s->nc);
 }
@@ -127,7 +127,7 @@ static ssize_t tap_write_packet(TAPState *s, const struct iovec *iov, int iovcnt
     len = RETRY_ON_EINTR(writev(s->fd, iov, iovcnt));
 
     if (len == -1 && errno == EAGAIN) {
-        tap_write_poll(s, true);
+        tap_update_write_poll(s, true);
         return 0;
     }
 
@@ -174,7 +174,7 @@ ssize_t tap_read_packet(int tapfd, uint8_t *buf, int maxlen)
 static void tap_send_completed(NetClientState *nc, ssize_t len)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
-    tap_read_poll(s, true);
+    tap_update_read_poll(s, true);
 }
 
 static void tap_send(void *opaque)
@@ -212,7 +212,7 @@ static void tap_send(void *opaque)
 
         size = qemu_send_packet_async(&s->nc, buf, size, tap_send_completed);
         if (size == 0) {
-            tap_read_poll(s, false);
+            tap_update_read_poll(s, false);
             break;
         } else if (size < 0) {
             break;
@@ -334,8 +334,8 @@ static void tap_cleanup(NetClientState *nc)
     tap_exit_notify(&s->exit, NULL);
     qemu_remove_exit_notifier(&s->exit);
 
-    tap_read_poll(s, false);
-    tap_write_poll(s, false);
+    tap_update_read_poll(s, false);
+    tap_update_write_poll(s, false);
     close(s->fd);
     s->fd = -1;
 }
@@ -343,8 +343,20 @@ static void tap_cleanup(NetClientState *nc)
 static void tap_poll(NetClientState *nc, bool enable)
 {
     TAPState *s = DO_UPCAST(TAPState, nc, nc);
-    tap_read_poll(s, enable);
-    tap_write_poll(s, enable);
+    tap_update_read_poll(s, enable);
+    tap_update_write_poll(s, enable);
+}
+
+static void tap_read_poll(NetClientState *nc, bool enable)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+    tap_update_read_poll(s, enable);
+}
+
+static void tap_write_poll(NetClientState *nc, bool enable)
+{
+    TAPState *s = DO_UPCAST(TAPState, nc, nc);
+    tap_update_write_poll(s, enable);
 }
 
 static bool tap_set_steering_ebpf(NetClientState *nc, int prog_fd)
@@ -382,6 +394,8 @@ static NetClientInfo net_tap_info = {
     .receive = tap_receive,
     .receive_iov = tap_receive_iov,
     .poll = tap_poll,
+    .read_poll = tap_read_poll,
+    .write_poll = tap_write_poll,
     .cleanup = tap_cleanup,
     .has_ufo = tap_has_ufo,
     .has_uso = tap_has_uso,
@@ -425,7 +439,7 @@ static TAPState *net_tap_fd_init(NetClientState *peer,
     if (vnet_hdr) {
         tap_fd_set_vnet_hdr_len(s->fd, s->host_vnet_hdr_len);
     }
-    tap_read_poll(s, true);
+    tap_update_read_poll(s, true);
     s->vhost_net = NULL;
 
     s->exit.notify = tap_exit_notify;
