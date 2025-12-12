@@ -11,8 +11,10 @@
 
 #include "qemu/osdep.h"
 #include "net/filter.h"
+#include "net/filter-mirror.h"
 #include "net/net.h"
 #include "qapi/error.h"
+#include "qapi/qapi-types-net.h"
 #include "qom/object.h"
 #include "qemu/main-loop.h"
 #include "qemu/error-report.h"
@@ -23,12 +25,10 @@
 #include "block/aio-wait.h"
 #include "system/runstate.h"
 
-#define TYPE_FILTER_MIRROR "filter-mirror"
 typedef struct MirrorState MirrorState;
 DECLARE_INSTANCE_CHECKER(MirrorState, FILTER_MIRROR,
                          TYPE_FILTER_MIRROR)
 
-#define TYPE_FILTER_REDIRECTOR "filter-redirector"
 DECLARE_INSTANCE_CHECKER(MirrorState, FILTER_REDIRECTOR,
                          TYPE_FILTER_REDIRECTOR)
 
@@ -44,6 +44,12 @@ struct MirrorState {
     bool vnet_hdr;
     bool enable_when_stopped;
     VMChangeStateEntry *vmsentry;
+
+    /* indev/outdev statistics for filter-redirector */
+    uint64_t indev_packets;
+    uint64_t indev_bytes;
+    uint64_t outdev_packets;
+    uint64_t outdev_bytes;
 };
 
 typedef struct FilterSendCo {
@@ -234,6 +240,10 @@ static ssize_t filter_redirector_receive_iov(NetFilterState *nf,
         ret = filter_send(s, iov, iovcnt);
         if (ret < 0) {
             error_report("filter redirector send failed(%s)", strerror(-ret));
+        } else if (ret > 0) {
+            /* Update outdev statistics on successful send */
+            s->outdev_packets++;
+            s->outdev_bytes += ret;
         }
         return ret;
     } else {
@@ -282,6 +292,10 @@ static void redirector_rs_finalize(SocketReadState *rs)
 {
     MirrorState *s = container_of(rs, MirrorState, rs);
     NetFilterState *nf = NETFILTER(s);
+
+    /* Update indev statistics */
+    s->indev_packets++;
+    s->indev_bytes += rs->packet_len;
 
     redirector_to_filter(nf, rs->buf, rs->packet_len);
 }
@@ -487,6 +501,27 @@ static void filter_mirror_class_init(ObjectClass *oc, const void *data)
     nfc->receive_iov = filter_mirror_receive_iov;
 }
 
+static GList *filter_redirector_get_stats(NetFilterState *nf)
+{
+    MirrorState *s = FILTER_REDIRECTOR(nf);
+    GList *list = NULL;
+    NetFilterCounter *counter;
+
+    counter = g_new0(NetFilterCounter, 1);
+    counter->name = g_strdup("indev");
+    counter->packets = s->indev_packets;
+    counter->bytes = s->indev_bytes;
+    list = g_list_append(list, counter);
+
+    counter = g_new0(NetFilterCounter, 1);
+    counter->name = g_strdup("outdev");
+    counter->packets = s->outdev_packets;
+    counter->bytes = s->outdev_bytes;
+    list = g_list_append(list, counter);
+
+    return list;
+}
+
 static void filter_redirector_class_init(ObjectClass *oc, const void *data)
 {
     NetFilterClass *nfc = NETFILTER_CLASS(oc);
@@ -506,6 +541,7 @@ static void filter_redirector_class_init(ObjectClass *oc, const void *data)
     nfc->cleanup = filter_redirector_cleanup;
     nfc->receive_iov = filter_redirector_receive_iov;
     nfc->status_changed = filter_redirector_status_changed;
+    nfc->get_stats = filter_redirector_get_stats;
 }
 
 static void filter_mirror_init(Object *obj)

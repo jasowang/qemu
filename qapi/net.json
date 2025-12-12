@@ -1193,6 +1193,25 @@
   'data': { 'netdev-id': 'str' } }
 
 ##
+# @NetFilterCounter:
+#
+# A filter-specific counter with packet and byte counts.
+#
+# @name: the name of the counter (e.g., "indev", "outdev")
+#
+# @packets: number of packets
+#
+# @bytes: number of bytes
+#
+# Since: 10.1
+##
+{ 'struct': 'NetFilterCounter',
+  'data': {
+    'name':    'str',
+    'packets': 'uint64',
+    'bytes':   'uint64' } }
+
+##
 # @NetFilterStats:
 #
 # Statistics for a network filter.
@@ -1211,6 +1230,9 @@
 #
 # @bytes-rx: number of received bytes
 #
+# @counters: filter-specific counters (optional, depends on
+#     filter type)
+#
 # Since: 10.1
 ##
 { 'struct': 'NetFilterStats',
@@ -1221,7 +1243,8 @@
     'packets-tx': 'uint64',
     'packets-rx': 'uint64',
     'bytes-tx':   'uint64',
-    'bytes-rx':   'uint64' } }
+    'bytes-rx':   'uint64',
+    '*counters':  ['NetFilterCounter'] } }
 
 ##
 # @query-netfilter-stats:

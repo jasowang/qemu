@@ -35,6 +35,13 @@ typedef void (FilterStatusChanged) (NetFilterState *nf, Error **errp);
 
 typedef void (FilterHandleEvent) (NetFilterState *nf, int event, Error **errp);
 
+/*
+ * Get filter-specific statistics counters.
+ * Returns a GList of NetFilterCounter (QAPI type), or NULL if no counters.
+ * The caller is responsible for freeing the returned list and its contents.
+ */
+typedef GList *(FilterGetStats) (NetFilterState *nf);
+
 struct NetFilterClass {
     ObjectClass parent_class;
 
@@ -43,6 +50,7 @@ struct NetFilterClass {
     FilterCleanup *cleanup;
     FilterStatusChanged *status_changed;
     FilterHandleEvent *handle_event;
+    FilterGetStats *get_stats;
     /* mandatory */
     FilterReceiveIOV *receive_iov;
 };

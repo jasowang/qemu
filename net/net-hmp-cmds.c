@@ -192,6 +192,15 @@ void hmp_info_netfilter_stats(Monitor *mon, const QDict *qdict)
                        stats->packets_tx, stats->bytes_tx);
         monitor_printf(mon, "  rx: %" PRIu64 " packets, %" PRIu64 " bytes\n",
                        stats->packets_rx, stats->bytes_rx);
+        if (stats->counters) {
+            NetFilterCounterList *counter_entry;
+            for (counter_entry = stats->counters; counter_entry;
+                 counter_entry = counter_entry->next) {
+                NetFilterCounter *counter = counter_entry->value;
+                monitor_printf(mon, "  %s: %" PRIu64 " packets, %" PRIu64 " bytes\n",
+                               counter->name, counter->packets, counter->bytes);
+            }
+        }
     }
 
     qapi_free_NetFilterStatsList(stats_list);

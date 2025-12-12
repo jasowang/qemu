@@ -1631,6 +1631,34 @@ NetFilterStatsList *qmp_query_netfilter_stats(const char *name, Error **errp)
             stats->bytes_tx = nf->bytes_tx;
             stats->bytes_rx = nf->bytes_rx;
 
+            /* Get filter-specific counters via callback */
+            {
+                NetFilterClass *nfc = NETFILTER_GET_CLASS(nf);
+                if (nfc->get_stats) {
+                    GList *filter_counters = nfc->get_stats(nf);
+                    GList *iter;
+
+                    for (iter = filter_counters; iter; iter = iter->next) {
+                        NetFilterCounter *fc = iter->data;
+                        NetFilterCounter *counter;
+
+                        counter = g_new0(NetFilterCounter, 1);
+                        counter->name = g_strdup(fc->name);
+                        counter->packets = fc->packets;
+                        counter->bytes = fc->bytes;
+                        QAPI_LIST_PREPEND(stats->counters, counter);
+
+                        g_free(fc->name);
+                        g_free(fc);
+                    }
+                    g_list_free(filter_counters);
+
+                    if (stats->counters) {
+                        stats->has_counters = true;
+                    }
+                }
+            }
+
             QAPI_LIST_APPEND(tail, stats);
 
             if (name) {
