@@ -1191,3 +1191,66 @@
 ##
 { 'event': 'NETDEV_VHOST_USER_DISCONNECTED',
   'data': { 'netdev-id': 'str' } }
+
+##
+# @NetFilterStats:
+#
+# Statistics for a network filter.
+#
+# @name: the name of the network filter
+#
+# @netdev: the netdev id attached to
+#
+# @type: the filter type
+#
+# @packets-tx: number of transmitted packets
+#
+# @packets-rx: number of received packets
+#
+# @bytes-tx: number of transmitted bytes
+#
+# @bytes-rx: number of received bytes
+#
+# Since: 10.1
+##
+{ 'struct': 'NetFilterStats',
+  'data': {
+    'name':       'str',
+    'netdev':     'str',
+    'type':       'str',
+    'packets-tx': 'uint64',
+    'packets-rx': 'uint64',
+    'bytes-tx':   'uint64',
+    'bytes-rx':   'uint64' } }
+
+##
+# @query-netfilter-stats:
+#
+# Return statistics for network filters.
+#
+# @name: Optional filter name to query.  If not specified, returns
+#     stats for all filters.
+#
+# Returns: A list of @NetFilterStats for each filter.
+#
+# Since: 10.1
+#
+# .. qmp-example::
+#
+#     -> { "execute": "query-netfilter-stats" }
+#     <- { "return": [
+#             {
+#                 "name": "f0",
+#                 "netdev": "net0",
+#                 "type": "filter-mirror",
+#                 "packets-tx": 12345,
+#                 "packets-rx": 0,
+#                 "bytes-tx": 1234567,
+#                 "bytes-rx": 0
+#             }
+#           ]
+#        }
+##
+{ 'command': 'query-netfilter-stats',
+  'data': { '*name': 'str' },
+  'returns': ['NetFilterStats'] }

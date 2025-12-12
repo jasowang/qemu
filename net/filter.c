@@ -33,13 +33,27 @@ ssize_t qemu_netfilter_receive(NetFilterState *nf,
                                int iovcnt,
                                NetPacketSent *sent_cb)
 {
+    ssize_t ret;
+    size_t size;
+
     if (qemu_can_skip_netfilter(nf)) {
         return 0;
     }
     if (nf->direction == direction ||
         nf->direction == NET_FILTER_DIRECTION_ALL) {
-        return NETFILTER_GET_CLASS(OBJECT(nf))->receive_iov(
+        /* Update statistics */
+        size = iov_size(iov, iovcnt);
+        if (direction == NET_FILTER_DIRECTION_TX) {
+            nf->packets_tx++;
+            nf->bytes_tx += size;
+        } else {
+            nf->packets_rx++;
+            nf->bytes_rx += size;
+        }
+
+        ret = NETFILTER_GET_CLASS(OBJECT(nf))->receive_iov(
                                    nf, sender, flags, iov, iovcnt, sent_cb);
+        return ret;
     }
 
     return 0;

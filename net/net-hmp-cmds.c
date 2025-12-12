@@ -168,3 +168,31 @@ void netdev_del_completion(ReadLineState *rs, int nb_args, const char *str)
         }
     }
 }
+
+void hmp_info_netfilter_stats(Monitor *mon, const QDict *qdict)
+{
+    NetFilterStatsList *stats_list, *entry;
+    Error *err = NULL;
+
+    stats_list = qmp_query_netfilter_stats(NULL, &err);
+    if (hmp_handle_error(mon, err)) {
+        return;
+    }
+
+    if (!stats_list) {
+        monitor_printf(mon, "No netfilters found\n");
+        return;
+    }
+
+    for (entry = stats_list; entry; entry = entry->next) {
+        NetFilterStats *stats = entry->value;
+        monitor_printf(mon, "%s: netdev=%s type=%s\n",
+                       stats->name, stats->netdev, stats->type);
+        monitor_printf(mon, "  tx: %" PRIu64 " packets, %" PRIu64 " bytes\n",
+                       stats->packets_tx, stats->bytes_tx);
+        monitor_printf(mon, "  rx: %" PRIu64 " packets, %" PRIu64 " bytes\n",
+                       stats->packets_rx, stats->bytes_rx);
+    }
+
+    qapi_free_NetFilterStatsList(stats_list);
+}

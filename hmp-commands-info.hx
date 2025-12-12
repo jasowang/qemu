@@ -45,6 +45,19 @@ SRST
 ERST
 
     {
+        .name       = "netfilter-stats",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show netfilter statistics",
+        .cmd        = hmp_info_netfilter_stats,
+    },
+
+SRST
+  ``info netfilter-stats``
+    Show netfilter statistics (packets and bytes counters).
+ERST
+
+    {
         .name       = "chardev",
         .args_type  = "",
         .params     = "",

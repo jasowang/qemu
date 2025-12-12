@@ -1604,6 +1604,48 @@ RxFilterInfoList *qmp_query_rx_filter(const char *name, Error **errp)
     return filter_list;
 }
 
+NetFilterStatsList *qmp_query_netfilter_stats(const char *name, Error **errp)
+{
+    NetClientState *nc;
+    NetFilterState *nf;
+    NetFilterStatsList *stats_list = NULL, **tail = &stats_list;
+    bool found = false;
+
+    QTAILQ_FOREACH(nc, &net_clients, next) {
+        QTAILQ_FOREACH(nf, &nc->filters, next) {
+            NetFilterStats *stats;
+            const char *filter_name;
+
+            filter_name = object_get_canonical_path_component(OBJECT(nf));
+            if (name && strcmp(filter_name, name) != 0) {
+                continue;
+            }
+
+            found = true;
+            stats = g_new0(NetFilterStats, 1);
+            stats->name = g_strdup(filter_name);
+            stats->netdev = g_strdup(nf->netdev_id);
+            stats->type = g_strdup(object_get_typename(OBJECT(nf)));
+            stats->packets_tx = nf->packets_tx;
+            stats->packets_rx = nf->packets_rx;
+            stats->bytes_tx = nf->bytes_tx;
+            stats->bytes_rx = nf->bytes_rx;
+
+            QAPI_LIST_APPEND(tail, stats);
+
+            if (name) {
+                return stats_list;
+            }
+        }
+    }
+
+    if (name && !found) {
+        error_setg(errp, "netfilter '%s' not found", name);
+    }
+
+    return stats_list;
+}
+
 void colo_notify_filters_event(int event, Error **errp)
 {
     NetClientState *nc;
