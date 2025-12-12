@@ -245,7 +245,7 @@ static ssize_t filter_redirector_receive_iov(NetFilterState *nf,
             s->outdev_packets++;
             s->outdev_bytes += ret;
         }
-        return ret;
+        return iov_size(iov, iovcnt);
     } else {
         return 0;
     }
