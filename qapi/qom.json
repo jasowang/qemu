@@ -488,13 +488,18 @@
 # @vnet_hdr_support: if true, vnet header support is enabled
 #     (default: false)
 #
+# @enable_when_stopped: if true, activate netdev's read poll when VM
+#     stops to allow filter-redirector to continue receiving data
+#     (default: false)
+#
 # Since: 2.6
 ##
 { 'struct': 'FilterRedirectorProperties',
   'base': 'NetfilterProperties',
   'data': { '*indev': 'str',
             '*outdev': 'str',
-            '*vnet_hdr_support': 'bool' } }
+            '*vnet_hdr_support': 'bool',
+            '*enable_when_stopped': 'bool' } }
 
 ##
 # @FilterRewriterProperties:

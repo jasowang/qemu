@@ -21,6 +21,7 @@
 #include "qemu/iov.h"
 #include "qemu/sockets.h"
 #include "block/aio-wait.h"
+#include "system/runstate.h"
 
 #define TYPE_FILTER_MIRROR "filter-mirror"
 typedef struct MirrorState MirrorState;
@@ -41,6 +42,8 @@ struct MirrorState {
     CharFrontend chr_out;
     SocketReadState rs;
     bool vnet_hdr;
+    bool enable_when_stopped;
+    VMChangeStateEntry *vmsentry;
 };
 
 typedef struct FilterSendCo {
@@ -251,6 +254,7 @@ static void filter_redirector_cleanup(NetFilterState *nf)
 
     qemu_chr_fe_deinit(&s->chr_in, false);
     qemu_chr_fe_deinit(&s->chr_out, false);
+    qemu_del_vm_change_state_handler(s->vmsentry);
 }
 
 static void filter_mirror_setup(NetFilterState *nf, Error **errp)
@@ -280,6 +284,18 @@ static void redirector_rs_finalize(SocketReadState *rs)
     NetFilterState *nf = NETFILTER(s);
 
     redirector_to_filter(nf, rs->buf, rs->packet_len);
+}
+
+static void filter_redirector_vm_state_change(void *opaque, bool running,
+                                              RunState state)
+{
+    NetFilterState *nf = opaque;
+    MirrorState *s = FILTER_REDIRECTOR(nf);
+    NetClientState *nc = nf->netdev;
+
+    if (!running && s->enable_when_stopped && nc->info->read_poll) {
+        nc->info->read_poll(nc, true);
+    }
 }
 
 static void filter_redirector_setup(NetFilterState *nf, Error **errp)
@@ -331,6 +347,9 @@ static void filter_redirector_setup(NetFilterState *nf, Error **errp)
             return;
         }
     }
+
+    s->vmsentry = qemu_add_vm_change_state_handler(
+        filter_redirector_vm_state_change, nf);
 }
 
 static void filter_redirector_status_changed(NetFilterState *nf, Error **errp)
@@ -437,6 +456,22 @@ static void filter_redirector_set_vnet_hdr(Object *obj,
     s->vnet_hdr = value;
 }
 
+static bool filter_redirector_get_enable_when_stopped(Object *obj, Error **errp)
+{
+    MirrorState *s = FILTER_REDIRECTOR(obj);
+
+    return s->enable_when_stopped;
+}
+
+static void filter_redirector_set_enable_when_stopped(Object *obj,
+                                                      bool value,
+                                                      Error **errp)
+{
+    MirrorState *s = FILTER_REDIRECTOR(obj);
+
+    s->enable_when_stopped = value;
+}
+
 static void filter_mirror_class_init(ObjectClass *oc, const void *data)
 {
     NetFilterClass *nfc = NETFILTER_CLASS(oc);
@@ -463,6 +498,9 @@ static void filter_redirector_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_bool(oc, "vnet_hdr_support",
                                    filter_redirector_get_vnet_hdr,
                                    filter_redirector_set_vnet_hdr);
+    object_class_property_add_bool(oc, "enable_when_stopped",
+                                   filter_redirector_get_enable_when_stopped,
+                                   filter_redirector_set_enable_when_stopped);
 
     nfc->setup = filter_redirector_setup;
     nfc->cleanup = filter_redirector_cleanup;

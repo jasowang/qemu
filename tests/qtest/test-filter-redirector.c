@@ -385,6 +385,110 @@ static void test_redirector_init_status_off(void)
     qtest_quit(qts);
 }
 
+/*
+ * Test filter-redirector works when VM is stopped (TX direction).
+ *
+ * This test verifies that when VM is stopped, the filter-redirector
+ * can still receive data from the netdev because the VM state change
+ * handler activates the netdev's read_poll(). Data flows from netdev
+ * to filter-redirector and out through the chardev.
+ *
+ * Data flow: backend_sock -> netdev (read_poll) -> filter-redirector -> chardev
+ */
+static void test_redirector_with_vm_stop(void)
+{
+    int backend_sock[2], recv_sock;
+    uint32_t ret = 0, len = 0;
+    char send_buf[] = "Hello!!";
+    char sock_path0[] = "filter-redirector0.XXXXXX";
+    char *recv_buf;
+    uint32_t size = sizeof(send_buf);
+    size = htonl(size);
+    QTestState *qts;
+    struct timeval tv;
+    fd_set rfds;
+
+    ret = socketpair(PF_UNIX, SOCK_STREAM, 0, backend_sock);
+    g_assert_cmpint(ret, !=, -1);
+
+    ret = mkstemp(sock_path0);
+    g_assert_cmpint(ret, !=, -1);
+
+    /*
+     * Setup TX path: netdev -> filter-redirector -> chardev
+     * Data sent to backend_sock[0] will be read by the netdev,
+     * passed through filter-redirector, and output to sock_path0.
+     * Enable enable_when_stopped to activate read_poll when VM stops.
+     */
+    qts = qtest_initf(
+        "-nic socket,id=qtest-bn0,fd=%d "
+        "-chardev socket,id=redirector0,path=%s,server=on,wait=off "
+        "-object filter-redirector,id=qtest-f0,netdev=qtest-bn0,"
+        "queue=tx,outdev=redirector0,enable_when_stopped=true ",
+        backend_sock[1], sock_path0);
+
+    recv_sock = unix_connect(sock_path0, NULL);
+    g_assert_cmpint(recv_sock, !=, -1);
+
+    /* Ensure connection is established */
+    qtest_qmp_assert_success(qts, "{ 'execute' : 'query-status'}");
+
+    struct iovec iov[] = {
+        {
+            .iov_base = &size,
+            .iov_len = sizeof(size),
+        }, {
+            .iov_base = send_buf,
+            .iov_len = sizeof(send_buf),
+        },
+    };
+
+    /*
+     * Stop the VM - this triggers our vm_state_change handler
+     * which should activate the netdev's read_poll()
+     */
+    qtest_qmp_assert_success(qts, "{ 'execute' : 'stop'}");
+
+    /* Wait for VM to actually stop */
+    qtest_qmp_eventwait(qts, "STOP");
+
+    /*
+     * Send data to backend socket while VM is stopped.
+     * The netdev should still read the data (because read_poll is
+     * activated by our vm_state_change handler), pass it through
+     * filter-redirector, and output to the chardev.
+     */
+    ret = iov_send(backend_sock[0], iov, 2, 0, sizeof(size) + sizeof(send_buf));
+    g_assert_cmpint(ret, ==, sizeof(send_buf) + sizeof(size));
+
+    /*
+     * Data should arrive at recv_sock even with VM stopped,
+     * because read_poll is activated.
+     */
+    FD_ZERO(&rfds);
+    FD_SET(recv_sock, &rfds);
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    ret = select(recv_sock + 1, &rfds, NULL, NULL, &tv);
+    g_assert_cmpint(ret, ==, 1);  /* Data should arrive */
+
+    ret = recv(recv_sock, &len, sizeof(len), 0);
+    g_assert_cmpint(ret, ==, sizeof(len));
+    len = ntohl(len);
+
+    g_assert_cmpint(len, ==, sizeof(send_buf));
+    recv_buf = g_malloc(len);
+    ret = recv(recv_sock, recv_buf, len, 0);
+    g_assert_cmpint(ret, ==, len);
+    g_assert_cmpstr(recv_buf, ==, send_buf);
+
+    g_free(recv_buf);
+    close(recv_sock);
+    close(backend_sock[0]);
+    unlink(sock_path0);
+    qtest_quit(qts);
+}
+
 static void test_redirector_rx_event_opened(void)
 {
     int backend_sock[2], send_sock;
@@ -489,5 +593,7 @@ int main(int argc, char **argv)
                    test_redirector_init_status_off);
     qtest_add_func("/netfilter/redirector_rx_event_opened",
                    test_redirector_rx_event_opened);
+    qtest_add_func("/netfilter/redirector_with_vm_stop",
+                   test_redirector_with_vm_stop);
     return g_test_run();
 }
