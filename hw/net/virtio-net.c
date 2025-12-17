@@ -41,6 +41,7 @@
 #include "standard-headers/linux/ethtool.h"
 #include "system/system.h"
 #include "system/replay.h"
+#include "system/runstate.h"
 #include "trace.h"
 #include "monitor/qdev.h"
 #include "monitor/monitor.h"
@@ -1308,6 +1309,38 @@ static void virtio_net_disable_rss(VirtIONet *n)
 
     n->rss_data.enabled = false;
     virtio_net_commit_rss_config(n);
+}
+
+static void virtio_net_backend_read_poll_set(VirtIONet *n, bool enable)
+{
+    int i;
+
+    if (!n->nic) {
+        return;
+    }
+
+    for (i = 0; i < (int)n->max_ncs; i++) {
+        NetClientState *frontend = qemu_get_subqueue(n->nic, i);
+        NetClientState *backend = frontend ? frontend->peer : NULL;
+
+        if (backend && backend->info && backend->info->read_poll) {
+            backend->info->read_poll(backend, enable);
+        }
+    }
+}
+
+static void virtio_net_vm_state_change_backend_poll(void *opaque, bool running,
+                                                    RunState state)
+{
+    VirtIONet *n = opaque;
+
+    /*
+     * Prevent backend (e.g. tap) from reading packets while the VM is stopped.
+     * This avoids pulling host->guest traffic into QEMU queues that may be
+     * purged on vmstop, and lets netfilter pipelines (e.g. redirector+buffer)
+     * explicitly re-enable polling when they are ready.
+     */
+    virtio_net_backend_read_poll_set(n, running);
 }
 
 static bool virtio_net_load_ebpf_fds(VirtIONet *n, Error **errp)
@@ -4047,6 +4080,15 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
             n->rss_data.specified_hash_types.on_bits |
             n->rss_data.specified_hash_types.auto_bits;
     }
+
+    /*
+     * Default behavior: use a higher priority than netfilter redirector
+     * handlers (default 0) so that on vmstop we disable first, and redirectors
+     * can re-enable read_poll after this if enable_when_stopped is set.
+     */
+    n->backend_poll_vmstate =
+        qemu_add_vm_change_state_handler_prio(
+            virtio_net_vm_state_change_backend_poll, n, 10);
 }
 
 static void virtio_net_device_unrealize(DeviceState *dev)
@@ -4057,6 +4099,11 @@ static void virtio_net_device_unrealize(DeviceState *dev)
 
     if (virtio_has_feature(n->host_features, VIRTIO_NET_F_RSS)) {
         virtio_net_unload_ebpf(n);
+    }
+
+    if (n->backend_poll_vmstate) {
+        qemu_del_vm_change_state_handler(n->backend_poll_vmstate);
+        n->backend_poll_vmstate = NULL;
     }
 
     /* This will stop vhost backend if appropriate. */

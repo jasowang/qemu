@@ -218,6 +218,8 @@ struct VirtIONet {
     uint64_t saved_guest_offloads;
     AnnounceTimer announce_timer;
     bool needs_vnet_hdr_swap;
+    /* Keep backend (e.g. tap) from reading while VM is stopped. */
+    VMChangeStateEntry *backend_poll_vmstate;
     bool mtu_bypass_backend;
     /* primary failover device is hidden*/
     bool failover_primary_hidden;
