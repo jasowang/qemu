@@ -312,6 +312,27 @@ static void filter_redirector_vm_state_change(void *opaque, bool running,
     }
 }
 
+static void filter_redirector_maybe_enable_read_poll(NetFilterState *nf)
+{
+    MirrorState *s = FILTER_REDIRECTOR(nf);
+    NetClientState *nc = nf->netdev;
+
+    if (!nc || !nc->info || !nc->info->read_poll) {
+        return;
+    }
+
+    /*
+     * When a redirector is created while the VM is already stopped,
+     * qemu_add_vm_change_state_handler() will not immediately invoke the
+     * callback for the current state. If enable_when_stopped is set, we
+     * must proactively enable read_poll so that tap packets can be drained
+     * into the netfilter chain (e.g. redirector+buffer) during stop.
+     */
+    if (!runstate_is_running() && s->enable_when_stopped) {
+        nc->info->read_poll(nc, true);
+    }
+}
+
 static void filter_redirector_setup(NetFilterState *nf, Error **errp)
 {
     MirrorState *s = FILTER_REDIRECTOR(nf);
@@ -364,6 +385,8 @@ static void filter_redirector_setup(NetFilterState *nf, Error **errp)
 
     s->vmsentry = qemu_add_vm_change_state_handler(
         filter_redirector_vm_state_change, nf);
+
+    filter_redirector_maybe_enable_read_poll(nf);
 }
 
 static void filter_redirector_status_changed(NetFilterState *nf, Error **errp)
@@ -482,8 +505,17 @@ static void filter_redirector_set_enable_when_stopped(Object *obj,
                                                       Error **errp)
 {
     MirrorState *s = FILTER_REDIRECTOR(obj);
+    NetFilterState *nf = NETFILTER(obj);
 
     s->enable_when_stopped = value;
+
+    /*
+     * If toggled on while the VM is already stopped, ensure we enable read_poll
+     * immediately (vm_state_change callback only runs on transitions).
+     */
+    if (value) {
+        filter_redirector_maybe_enable_read_poll(nf);
+    }
 }
 
 static void filter_mirror_class_init(ObjectClass *oc, const void *data)
